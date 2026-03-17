@@ -1,3 +1,6 @@
 [submodule "TE"]
 	path = TE
 	url = git@github.com:harryzhou2000/TransformerEngine.git
+[submodule "MLM"]
+	path = MLM
+	url = git@github.com:harryzhou2000/Megatron-LM.git
