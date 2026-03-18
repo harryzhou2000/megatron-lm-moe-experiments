@@ -36,35 +36,100 @@ Usage
   python scripts/test_fused_topk.py --pass backward
 
   # Single exact config
-  python scripts/test_fused_topk.py --mode correctness \
+  python scripts/test_fused_topk.py --mode correctness \\
       --num-tokens 4096 --num-experts 64 --topk 4 --score-function softmax
 
   # Custom kernel params, sweep token counts automatically
-  python scripts/test_fused_topk.py --topk 36 --score-function softmax \
-      --use-pre-softmax --num-experts 2304 --input-type random
+  python scripts/test_fused_topk.py --topk 36 --score-function pre-softmax \\
+      --num-experts 2304 --input-type random
 
   # Benchmark only, full sweep
   python scripts/test_fused_topk.py --mode benchmark
 
+  # Sqrtsoftplus activation
+  python scripts/test_fused_topk.py --score-function sqrtsoftplus --topk 4
+
   # Custom dtype
   python scripts/test_fused_topk.py --dtype bf16
+
+  # Export benchmark results to CSV
+  python scripts/test_fused_topk.py --mode benchmark --csv results.csv
 
   # Override CUDA device
   CUDA_VISIBLE_DEVICES=3 python scripts/test_fused_topk.py
 """
 
 import argparse
+import csv
 import sys
 import time
 from copy import deepcopy
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 
 from transformer_engine.pytorch.router import (
     fused_topk_with_score_function,
     fused_compute_score_for_moe_aux_loss,
 )
+
+
+# ---------------------------------------------------------------------------
+# Score function name convention
+# ---------------------------------------------------------------------------
+# The user-facing --score-function flag uses a combined name that encodes
+# the pre-softmax option:
+#   "pre-softmax"   -> score_function="softmax", use_pre_softmax=True
+#   "softmax"       -> score_function="softmax", use_pre_softmax=False
+#   "sigmoid"       -> score_function="sigmoid", use_pre_softmax=False
+#   "sqrtsoftplus"  -> score_function="sqrtsoftplus", use_pre_softmax=False
+#
+# Internally we always split into (score_function, use_pre_softmax) for the
+# kernel calls, and re-join for display / CSV.
+
+ALL_SCORE_FUNCTIONS = ["pre-softmax", "softmax", "sigmoid", "sqrtsoftplus"]
+
+
+def _split_score_function(name: str) -> Tuple[str, bool]:
+    """Split combined name into (kernel_score_function, use_pre_softmax)."""
+    if name == "pre-softmax":
+        return "softmax", True
+    return name, False
+
+
+def _join_score_function(score_function: str, use_pre_softmax: bool) -> str:
+    """Join (kernel_score_function, use_pre_softmax) into a combined display name."""
+    if score_function == "softmax" and use_pre_softmax:
+        return "pre-softmax"
+    return score_function
+
+
+# ---------------------------------------------------------------------------
+# Sweep grid definitions (single source of truth)
+# ---------------------------------------------------------------------------
+
+SWEEP_CORRECTNESS = dict(
+    tokens=[1, 37, 512, 8192],
+    experts=[8, 33, 64, 256],
+    topk=[1, 4, 8],
+    score_functions=ALL_SCORE_FUNCTIONS,
+    input_types=["arange", "random", "extreme", "narrow", "constant"],
+    group_topk=[0, 4],
+    max_tests=200,
+)
+
+SWEEP_BENCHMARK = dict(
+    tokens=[128, 8192, 32768, 131072],
+    experts=[8, 256, 512, 2304],
+    topk=[8, 32, 36],
+    score_functions=ALL_SCORE_FUNCTIONS,
+    group_topk=[0, 4],
+)
+
+# Token list used when user specifies other params but omits --num-tokens.
+USER_TOKEN_SWEEP_CORRECTNESS = [1, 64, 512, 2048, 8192, 32768]
+USER_TOKEN_SWEEP_BENCHMARK = [128, 512, 2048, 8192, 32768, 131072]
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +176,7 @@ class _NaNDetected(Exception):
 
 
 # Input types that are safe to fall back to when NaN is detected.
-# "random" (standard normal, σ=1) keeps values in a range where softmax
+# "random" (standard normal, sigma=1) keeps values in a range where softmax
 # and sigmoid produce well-conditioned outputs and gradients.
 _SAFE_INPUT_TYPE = "random"
 
@@ -150,16 +215,16 @@ def make_logits(
     Generate logits on CUDA with controlled distribution.
 
     input_type:
-      arange   – deterministic, same as existing tests (monotonic, no ties)
-      random   – standard normal
-      uniform  – uniform [-1, 1]
-      extreme  – large magnitude (stress softmax stability)
-      narrow   – near-zero (sigmoid ≈ 0.5, softmax ≈ uniform)
-      constant – all equal (tie-breaking stress test)
+      arange   - deterministic, same as existing tests (monotonic, no ties)
+      random   - standard normal
+      uniform  - uniform [-1, 1]
+      extreme  - large magnitude (stress softmax stability)
+      narrow   - near-zero (sigmoid ~ 0.5, softmax ~ uniform)
+      constant - all equal (tie-breaking stress test)
     """
     device = "cuda"
     if input_type == "arange":
-        if score_function == "sigmoid":
+        if score_function in ("sigmoid", "sqrtsoftplus"):
             offset = (
                 torch.arange(-num_tokens // 2, num_tokens // 2, dtype=dtype, device=device)
                 * 1e-4
@@ -199,6 +264,11 @@ def make_logits(
 # PyTorch references
 # ---------------------------------------------------------------------------
 
+def _sqrtsoftplus(x: torch.Tensor) -> torch.Tensor:
+    """sqrtsoftplus(x) = sqrt(softplus(x)), matching PyTorch Softplus(beta=1, threshold=20)."""
+    return torch.sqrt(F.softplus(x.float(), beta=1.0, threshold=20.0))
+
+
 def _group_limited_topk(
     scores: torch.Tensor,
     topk: int,
@@ -233,9 +303,24 @@ def reference_topk_forward(
     scaling_factor: float,
     score_function: str,
     expert_bias: Optional[torch.Tensor],
+    forced_routing_map: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Pure-PyTorch reference matching the fused topk kernel logic."""
+    """Pure-PyTorch reference matching the fused topk kernel logic.
+
+    All internal arithmetic is done in float32 to match the TE kernel
+    (CompType = float).  Only the final outputs are cast to logits.dtype.
+
+    If *forced_routing_map* is provided (bool [T, E]), the topk selection step
+    is skipped and the given map is used instead.  This ensures the backward
+    gradient flows through exactly the same expert positions as the fused
+    kernel, eliminating spurious mismatches caused by tie-breaking differences
+    in near-uniform score distributions.
+    """
+    orig_dtype = logits.dtype
     num_tokens, num_experts = logits.shape
+
+    # Work in float32 throughout, matching the kernel's CompType = float.
+    logits_f = logits.float()
 
     def _topk(scores):
         if group_topk and group_topk > 0:
@@ -244,17 +329,40 @@ def reference_topk_forward(
             )
         return torch.topk(scores, k=topk, dim=1)
 
+    def _indices_from_routing_map(routing_map: torch.Tensor) -> torch.Tensor:
+        """Convert bool [T, E] routing_map to int64 [T, K] top_indices.
+
+        Within each row, selected indices are returned in ascending order
+        (matching the positional order the kernel writes them).
+        """
+        # nonzero gives (row, col) pairs sorted by row then col
+        return routing_map.nonzero(as_tuple=False)[:, 1].view(num_tokens, topk)
+
     if score_function == "softmax":
         if use_pre_softmax:
-            scores = torch.softmax(logits, dim=-1, dtype=torch.float32).to(logits.dtype)
-            probs, top_indices = _topk(scores)
+            scores = torch.softmax(logits_f, dim=-1)
+            if forced_routing_map is not None:
+                top_indices = _indices_from_routing_map(forced_routing_map)
+                probs = torch.gather(scores, dim=1, index=top_indices)
+            else:
+                probs, top_indices = _topk(scores)
         else:
-            scores, top_indices = _topk(logits)
-            probs = torch.softmax(scores, dim=-1, dtype=torch.float32).to(logits.dtype)
-    elif score_function == "sigmoid":
-        scores = torch.sigmoid(logits.float()).to(logits.dtype)
-        if expert_bias is not None:
-            scores_for_routing = scores + expert_bias
+            if forced_routing_map is not None:
+                top_indices = _indices_from_routing_map(forced_routing_map)
+                scores = torch.gather(logits_f, dim=1, index=top_indices)
+            else:
+                scores, top_indices = _topk(logits_f)
+            probs = torch.softmax(scores, dim=-1)
+    elif score_function in ("sigmoid", "sqrtsoftplus"):
+        if score_function == "sigmoid":
+            scores = torch.sigmoid(logits_f)
+        else:
+            scores = _sqrtsoftplus(logits_f)
+        if forced_routing_map is not None:
+            top_indices = _indices_from_routing_map(forced_routing_map)
+            scores = torch.gather(scores, dim=1, index=top_indices)
+        elif expert_bias is not None:
+            scores_for_routing = scores + expert_bias.float()
             _, top_indices = _topk(scores_for_routing)
             scores = torch.gather(scores, dim=1, index=top_indices)
         else:
@@ -266,8 +374,13 @@ def reference_topk_forward(
     if scaling_factor is not None:
         probs = probs * scaling_factor
 
-    topk_masked_gates = torch.zeros_like(logits).scatter(1, top_indices, probs)
-    topk_map = torch.zeros_like(logits, dtype=torch.int32).scatter(1, top_indices, 1).bool()
+    # Cast back to original dtype for the output tensors.
+    topk_masked_gates = torch.zeros(
+        num_tokens, num_experts, dtype=orig_dtype, device=logits.device,
+    ).scatter(1, top_indices, probs.to(orig_dtype))
+    topk_map = torch.zeros(
+        num_tokens, num_experts, dtype=torch.int32, device=logits.device,
+    ).scatter(1, top_indices, 1).bool()
     return topk_masked_gates, topk_map
 
 
@@ -278,15 +391,22 @@ def reference_aux_loss_scores_forward(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Pure-PyTorch reference matching the fused aux loss score kernel logic.
 
-    Returns (routing_map, scores) — note scores is the full [T, E] tensor
+    Returns (routing_map, scores) -- note scores is the full [T, E] tensor
     (softmax or normalized-sigmoid over all experts), NOT just the topk values.
+
+    All internal arithmetic is done in float32 to match the TE kernel.
+    The scores output is float32 (matching the kernel's CompType).
     """
+    logits_f = logits.float()
+
     if score_function == "softmax":
-        scores = torch.softmax(logits, dim=-1, dtype=torch.float32).to(logits.dtype)
-    elif score_function == "sigmoid":
-        scores = torch.sigmoid(logits.float()).to(logits.dtype)
-        if topk > 1:
-            scores = scores / (scores.sum(dim=-1, keepdim=True) + 1e-20)
+        scores = torch.softmax(logits_f, dim=-1)
+    elif score_function in ("sigmoid", "sqrtsoftplus"):
+        if score_function == "sigmoid":
+            scores = torch.sigmoid(logits_f)
+        else:
+            scores = _sqrtsoftplus(logits_f)
+        scores = scores / (scores.sum(dim=-1, keepdim=True) + 1e-20)
     else:
         raise ValueError(f"Unknown score_function: {score_function}")
 
@@ -296,7 +416,7 @@ def reference_aux_loss_scores_forward(
 
 
 # ===========================================================================
-# Topk kernel — correctness
+# Topk kernel -- correctness
 # ===========================================================================
 
 def run_topk_correctness(
@@ -321,9 +441,9 @@ def run_topk_correctness(
     logits = make_logits(num_tokens, num_experts, dtype, input_type, score_function)
     logits.requires_grad = needs_grad
 
-    if enable_bias and score_function == "sigmoid":
+    if enable_bias and score_function in ("sigmoid", "sqrtsoftplus"):
         expert_bias = (
-            torch.arange(num_experts, device="cuda", dtype=dtype) * 0.1
+            torch.arange(num_experts, device="cuda", dtype=torch.float32) * 0.1
         ).flip(dims=[0])
     else:
         expert_bias = None
@@ -331,12 +451,14 @@ def run_topk_correctness(
     logits_clone = logits.detach().clone().requires_grad_(needs_grad)
     expert_bias_clone = expert_bias.clone() if expert_bias is not None else None
 
-    # Reference forward
-    ref_probs, ref_map = reference_topk_forward(
-        logits, topk, use_pre_softmax,
-        num_groups, group_topk, scaling_factor,
-        score_function, expert_bias,
-    )
+    # When testing backward, we need both reference and fused to use the same
+    # routing_map so that tie-breaking differences in near-uniform score
+    # distributions don't cause spurious gradient mismatches.  Strategy:
+    #   1. Run fused kernel forward (always needed).
+    #   2. For forward check: run reference with its own topk (no forced map)
+    #      to verify routing_map correctness independently.
+    #   3. For backward check: run reference with fused_map forced, so autograd
+    #      backward flows through identical expert positions.
 
     # Fused kernel forward
     fused_probs, fused_map = fused_topk_with_score_function(
@@ -350,7 +472,7 @@ def run_topk_correctness(
     )
 
     # --- NaN safeguard: detect NaN in forward outputs ---
-    has_nan = ref_probs.isnan().any() or fused_probs.isnan().any()
+    has_nan = fused_probs.isnan().any()
 
     # Build tolerance kwargs (only set overrides if provided)
     tol_kw: Dict = {}
@@ -359,27 +481,47 @@ def run_topk_correctness(
     if rtol is not None:
         tol_kw["rtol"] = rtol
 
+    sf_display = _join_score_function(score_function, use_pre_softmax)
     tag = (
-        f"[topk {test_pass:>4s} | {score_function:>7s} | tokens={num_tokens:>6d} | "
-        f"experts={num_experts:>4d} | topk={topk} | pre_sm={use_pre_softmax} | "
+        f"[topk {test_pass:>4s} | {sf_display:>12s} | tokens={num_tokens:>6d} | "
+        f"experts={num_experts:>4d} | topk={topk} | "
         f"grp_topk={group_topk} | scale={scaling_factor} | bias={enable_bias} | "
         f"dtype={dtype} | input={input_type}]"
     )
     try:
         # --- Forward check ---
         if test_pass in ("forward", "both"):
-            if has_nan:
+            # Reference forward with its own topk selection (no forced map).
+            ref_probs_fwd, ref_map_fwd = reference_topk_forward(
+                logits, topk, use_pre_softmax,
+                num_groups, group_topk, scaling_factor,
+                score_function, expert_bias,
+            )
+            if has_nan or ref_probs_fwd.isnan().any():
                 raise _NaNDetected()
             fwd_ok = _check_topk_forward(
-                ref_probs, ref_map, fused_probs, fused_map,
+                ref_probs_fwd, ref_map_fwd, fused_probs, fused_map,
                 logits, score_function, use_pre_softmax, expert_bias, dtype, tol_kw, tag,
             )
             if not fwd_ok:
                 return False
+            # Discard ref forward graph (not needed for backward).
+            if needs_grad:
+                logits.grad = None
 
         # --- Backward check ---
         if test_pass in ("backward", "both"):
-            ref_loss = ref_probs.sum()
+            if has_nan:
+                raise _NaNDetected()
+            # Reference forward with fused kernel's routing_map forced, so both
+            # backward passes flow through identical expert positions.
+            ref_probs_bwd, _ = reference_topk_forward(
+                logits, topk, use_pre_softmax,
+                num_groups, group_topk, scaling_factor,
+                score_function, expert_bias,
+                forced_routing_map=fused_map.detach(),
+            )
+            ref_loss = ref_probs_bwd.sum()
             ref_loss.backward()
             fused_loss = fused_probs.sum()
             fused_loss.backward()
@@ -404,7 +546,7 @@ def run_topk_correctness(
 
     except _NaNDetected:
         if _is_nan_retry:
-            # Already retried once — give up and report as a pass with warning.
+            # Already retried once -- give up and report as a pass with warning.
             print(f"  SKIP {tag}  (NaN in both input types)")
             return True
         print(
@@ -420,12 +562,7 @@ def run_topk_correctness(
             atol=atol, rtol=rtol, _is_nan_retry=True,
         )
     except AssertionError as e:
-        prob_diff = (ref_probs - fused_probs).abs()
-        map_diff = (ref_map != fused_map).sum().item()
         print(f"  FAIL {tag}")
-        print(f"       routing_map mismatches : {map_diff}")
-        print(f"       probs max abs diff     : {prob_diff.max().item():.6e}")
-        print(f"       probs mean abs diff    : {prob_diff.mean().item():.6e}")
         print(f"       {e}")
         return False
     except Exception as e:
@@ -445,10 +582,14 @@ def _check_topk_forward(
         torch.testing.assert_close(ref_probs, fused_probs, **tol_kw)
         return True
 
-    # Routing maps disagree — check if the disagreement is due to tied scores.
+    # Routing maps disagree -- check if the disagreement is due to tied scores.
     num_tokens, num_experts = logits.shape
     if score_function == "sigmoid":
         scores = torch.sigmoid(logits.detach().float()).to(dtype)
+        if expert_bias is not None:
+            scores = scores + expert_bias
+    elif score_function == "sqrtsoftplus":
+        scores = _sqrtsoftplus(logits.detach()).to(dtype)
         if expert_bias is not None:
             scores = scores + expert_bias
     elif use_pre_softmax:
@@ -497,7 +638,7 @@ def _check_topk_forward(
 
 
 # ===========================================================================
-# Aux loss score kernel — correctness
+# Aux loss score kernel -- correctness
 # ===========================================================================
 
 def run_aux_loss_correctness(
@@ -537,7 +678,7 @@ def run_aux_loss_correctness(
         tol_kw["rtol"] = rtol
 
     tag = (
-        f"[aux_loss {test_pass:>4s} | {score_function:>7s} | tokens={num_tokens:>6d} | "
+        f"[aux_loss {test_pass:>4s} | {score_function:>12s} | tokens={num_tokens:>6d} | "
         f"experts={num_experts:>4d} | topk={topk} | dtype={dtype} | input={input_type}]"
     )
 
@@ -548,7 +689,7 @@ def run_aux_loss_correctness(
                 raise _NaNDetected()
             # Check scores (full [T, E] tensor)
             torch.testing.assert_close(ref_scores, fused_scores, **tol_kw)
-            # Check routing map — allow tie-break differences
+            # Check routing map -- allow tie-break differences
             map_match = (ref_map == fused_map).all().item()
             if not map_match:
                 # For aux loss, the scores are identical (just checked above),
@@ -557,7 +698,7 @@ def run_aux_loss_correctness(
                 n_diff_tokens = (ref_map != fused_map).any(dim=1).sum().item()
                 # Verify the differences are at tied score boundaries
                 _, ref_top_indices = torch.topk(ref_scores.detach(), k=topk, dim=1)
-                # If scores match, any map diff is tie-breaking — accept it.
+                # If scores match, any map diff is tie-breaking -- accept it.
                 pass  # scores already verified above, ties are acceptable
 
         # --- Backward check ---
@@ -589,7 +730,7 @@ def run_aux_loss_correctness(
 
     except _NaNDetected:
         if _is_nan_retry:
-            # Already retried once — give up and report as a pass with warning.
+            # Already retried once -- give up and report as a pass with warning.
             print(f"  SKIP {tag}  (NaN in both input types)")
             return True
         print(
@@ -628,8 +769,9 @@ def topk_correctness_suite(args) -> bool:
     if args.user_specified:
         token_list = (
             [args.num_tokens] if args.num_tokens is not None
-            else [1, 64, 512, 2048, 8192, 32768]
+            else USER_TOKEN_SWEEP_CORRECTNESS
         )
+        sf_kernel, use_pre = _split_score_function(args.score_function)
         print(
             f"\nRunning {len(token_list)} topk correctness test(s) with user config "
             f"(dtype={args.dtype}, pass={args.test_pass})...\n"
@@ -640,11 +782,11 @@ def topk_correctness_suite(args) -> bool:
                 num_tokens=nt,
                 num_experts=args.num_experts,
                 topk=args.topk,
-                use_pre_softmax=args.use_pre_softmax,
+                use_pre_softmax=use_pre,
                 num_groups=args.num_groups,
                 group_topk=args.group_topk,
                 scaling_factor=args.scaling_factor,
-                score_function=args.score_function,
+                score_function=sf_kernel,
                 enable_bias=args.enable_bias,
                 dtype=args.dtype,
                 input_type=args.input_type,
@@ -654,33 +796,34 @@ def topk_correctness_suite(args) -> bool:
             )
             passed += int(ok)
     else:
+        S = SWEEP_CORRECTNESS
         configs: List[Dict] = []
-        for sf in ["softmax", "sigmoid"]:
-            for nt in [1, 37, 512, 2048, 8192]:
-                for ne in [8, 33, 64, 128, 256]:
-                    for tk in [1, 2, 4, 8]:
+        for sf_name in S["score_functions"]:
+            sf_kernel, use_pre = _split_score_function(sf_name)
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
                         if tk > ne:
                             continue
-                        for inp in ["arange", "random", "extreme", "narrow", "constant"]:
-                            for pre in ([True, False] if sf == "softmax" else [False]):
-                                for grp in [0, 4]:
-                                    if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
-                                        continue
-                                    configs.append(dict(
-                                        num_tokens=nt, num_experts=ne, topk=tk,
-                                        use_pre_softmax=pre,
-                                        num_groups=8 if grp else 0,
-                                        group_topk=grp,
-                                        scaling_factor=1.0,
-                                        score_function=sf,
-                                        enable_bias=(sf == "sigmoid"),
-                                        input_type=inp,
-                                    ))
+                        for inp in S["input_types"]:
+                            for grp in S["group_topk"]:
+                                if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
+                                    continue
+                                configs.append(dict(
+                                    num_tokens=nt, num_experts=ne, topk=tk,
+                                    use_pre_softmax=use_pre,
+                                    num_groups=8 if grp else 0,
+                                    group_topk=grp,
+                                    scaling_factor=1.0,
+                                    score_function=sf_kernel,
+                                    enable_bias=(sf_kernel in ("sigmoid", "sqrtsoftplus")),
+                                    input_type=inp,
+                                ))
 
-        MAX_TESTS = 200
-        if len(configs) > MAX_TESTS:
-            step = len(configs) // MAX_TESTS
-            configs = configs[::step][:MAX_TESTS]
+        max_tests = S["max_tests"]
+        if len(configs) > max_tests:
+            step = len(configs) // max_tests
+            configs = configs[::step][:max_tests]
 
         print(f"\nRunning {len(configs)} topk correctness tests "
               f"(dtype={args.dtype}, pass={args.test_pass})...\n")
@@ -706,8 +849,9 @@ def aux_loss_correctness_suite(args) -> bool:
     if args.user_specified:
         token_list = (
             [args.num_tokens] if args.num_tokens is not None
-            else [1, 64, 512, 2048, 8192, 32768]
+            else USER_TOKEN_SWEEP_CORRECTNESS
         )
+        sf_kernel, _ = _split_score_function(args.score_function)
         print(
             f"\nRunning {len(token_list)} aux_loss correctness test(s) with user config "
             f"(dtype={args.dtype}, pass={args.test_pass})...\n"
@@ -718,7 +862,7 @@ def aux_loss_correctness_suite(args) -> bool:
                 num_tokens=nt,
                 num_experts=args.num_experts,
                 topk=args.topk,
-                score_function=args.score_function,
+                score_function=sf_kernel,
                 dtype=args.dtype,
                 input_type=args.input_type,
                 test_pass=args.test_pass,
@@ -727,24 +871,34 @@ def aux_loss_correctness_suite(args) -> bool:
             )
             passed += int(ok)
     else:
+        S = SWEEP_CORRECTNESS
+        # Aux loss doesn't use pre-softmax, so deduplicate: pre-softmax -> softmax
+        aux_sf_kernels = []
+        seen = set()
+        for sf_name in S["score_functions"]:
+            sf_kernel, _ = _split_score_function(sf_name)
+            if sf_kernel not in seen:
+                aux_sf_kernels.append(sf_kernel)
+                seen.add(sf_kernel)
+
         configs: List[Dict] = []
-        for sf in ["softmax", "sigmoid"]:
-            for nt in [1, 37, 512, 2048, 8192]:
-                for ne in [8, 33, 64, 128, 256]:
-                    for tk in [1, 2, 4, 8]:
+        for sf_kernel in aux_sf_kernels:
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
                         if tk > ne:
                             continue
-                        for inp in ["arange", "random", "extreme", "narrow", "constant"]:
+                        for inp in S["input_types"]:
                             configs.append(dict(
                                 num_tokens=nt, num_experts=ne, topk=tk,
-                                score_function=sf,
+                                score_function=sf_kernel,
                                 input_type=inp,
                             ))
 
-        MAX_TESTS = 200
-        if len(configs) > MAX_TESTS:
-            step = len(configs) // MAX_TESTS
-            configs = configs[::step][:MAX_TESTS]
+        max_tests = S["max_tests"]
+        if len(configs) > max_tests:
+            step = len(configs) // max_tests
+            configs = configs[::step][:max_tests]
 
         print(f"\nRunning {len(configs)} aux_loss correctness tests "
               f"(dtype={args.dtype}, pass={args.test_pass})...\n")
@@ -785,8 +939,8 @@ def _benchmark_topk_one(
         num_tokens, num_experts, dtype=dtype, device="cuda", requires_grad=needs_grad,
     )
     expert_bias = None
-    if score_function == "sigmoid":
-        expert_bias = torch.randn(num_experts, dtype=dtype, device="cuda") * 0.1
+    if score_function in ("sigmoid", "sqrtsoftplus"):
+        expert_bias = torch.randn(num_experts, dtype=torch.float32, device="cuda") * 0.1
 
     call_args = dict(
         logits=logits,
@@ -845,13 +999,13 @@ def _benchmark_topk_one(
             warmup=warmup, iters=iters,
         )
 
+    sf_display = _join_score_function(score_function, use_pre_softmax)
     return dict(
         kernel="topk",
         num_tokens=num_tokens,
         num_experts=num_experts,
         topk=topk,
-        score_function=score_function,
-        use_pre_softmax=use_pre_softmax,
+        score_function=sf_display,
         group_topk=group_topk,
         dtype=str(dtype).replace("torch.", ""),
         test_pass=test_pass,
@@ -924,7 +1078,6 @@ def _benchmark_aux_loss_one(
         num_experts=num_experts,
         topk=topk,
         score_function=score_function,
-        use_pre_softmax=False,
         group_topk=0,
         dtype=str(dtype).replace("torch.", ""),
         test_pass=test_pass,
@@ -1002,14 +1155,21 @@ def _time_forward_backward(fn, loss_fn, warmup: int, iters: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Benchmark printing
+# Benchmark printing & CSV
 # ---------------------------------------------------------------------------
+
+_BENCH_COLUMNS = [
+    "kernel", "num_tokens", "num_experts", "topk", "score_function",
+    "group_topk", "dtype", "test_pass",
+    "fused_ms", "ref_ms", "speedup", "tokens_per_sec",
+]
+
 
 def _print_bench_header() -> None:
     """Print the benchmark table header."""
     hdr = (
-        f"{'kernel':>8s} {'tokens':>8s} {'experts':>7s} {'topk':>4s} {'score_fn':>8s} "
-        f"{'pre_sm':>6s} {'grp_tk':>6s} {'dtype':>8s} {'pass':>7s} "
+        f"{'kernel':>8s} {'tokens':>8s} {'experts':>7s} {'topk':>4s} {'score_fn':>12s} "
+        f"{'grp_tk':>6s} {'dtype':>8s} {'pass':>7s} "
         f"{'fused_ms':>9s} {'ref_ms':>9s} {'speedup':>7s} {'tok/s':>12s}"
     )
     print(hdr)
@@ -1021,7 +1181,7 @@ def _print_bench_row(r: Dict) -> None:
     """Print a single benchmark result row and flush immediately."""
     print(
         f"{r['kernel']:>8s} {r['num_tokens']:>8d} {r['num_experts']:>7d} {r['topk']:>4d} "
-        f"{r['score_function']:>8s} {str(r['use_pre_softmax']):>6s} "
+        f"{r['score_function']:>12s} "
         f"{r['group_topk']:>6d} {r['dtype']:>8s} {r['test_pass']:>7s} "
         f"{r['fused_ms']:>9.4f} {r['ref_ms']:>9.4f} "
         f"{r['speedup']:>7.2f}x "
@@ -1030,20 +1190,31 @@ def _print_bench_row(r: Dict) -> None:
     sys.stdout.flush()
 
 
+def _write_csv(results: List[Dict], path: str) -> None:
+    """Write benchmark results to a CSV file."""
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_BENCH_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"Benchmark results written to {path} ({len(results)} rows)")
+
+
 # ---------------------------------------------------------------------------
 # Benchmark suites
 # ---------------------------------------------------------------------------
 
-def topk_benchmark_suite(args) -> None:
-    """Run topk benchmark across configurations."""
+def topk_benchmark_suite(args) -> List[Dict]:
+    """Run topk benchmark across configurations.  Returns list of result dicts."""
     warmup = args.warmup
     iters = args.iters
+    results: List[Dict] = []
 
     if args.user_specified:
         token_list = (
             [args.num_tokens] if args.num_tokens is not None
-            else [128, 512, 2048, 8192, 32768, 131072]
+            else USER_TOKEN_SWEEP_BENCHMARK
         )
+        sf_kernel, use_pre = _split_score_function(args.score_function)
         print(
             f"\nBenchmarking {len(token_list)} topk config(s) "
             f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n"
@@ -1054,8 +1225,8 @@ def topk_benchmark_suite(args) -> None:
                 num_tokens=nt,
                 num_experts=args.num_experts,
                 topk=args.topk,
-                score_function=args.score_function,
-                use_pre_softmax=args.use_pre_softmax,
+                score_function=sf_kernel,
+                use_pre_softmax=use_pre,
                 group_topk=args.group_topk or 0,
                 dtype=args.dtype,
                 test_pass=args.test_pass,
@@ -1063,21 +1234,18 @@ def topk_benchmark_suite(args) -> None:
                 iters=iters,
             )
             _print_bench_row(r)
+            results.append(r)
     else:
-        sweep_tokens = [128, 512, 8192, 32768, 131072]
-        sweep_experts = [8, 256, 512, 2304]
-        sweep_topk = [1, 4, 8, 32, 36]
-        sweep_sf = ["softmax", "sigmoid"]
-        sweep_grp = [0, 4]
-
+        S = SWEEP_BENCHMARK
         total = 0
-        for nt in sweep_tokens:
-            for ne in sweep_experts:
-                for tk in sweep_topk:
-                    if tk > ne:
-                        continue
-                    for sf in sweep_sf:
-                        for grp in sweep_grp:
+        for sf_name in S["score_functions"]:
+            sf_kernel, _ = _split_score_function(sf_name)
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
+                        if tk > ne:
+                            continue
+                        for grp in S["group_topk"]:
                             if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
                                 continue
                             total += 1
@@ -1086,37 +1254,42 @@ def topk_benchmark_suite(args) -> None:
               f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n")
         _print_bench_header()
 
-        for nt in sweep_tokens:
-            for ne in sweep_experts:
-                for tk in sweep_topk:
-                    if tk > ne:
-                        continue
-                    for sf in sweep_sf:
-                        for grp in sweep_grp:
+        for sf_name in S["score_functions"]:
+            sf_kernel, use_pre = _split_score_function(sf_name)
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
+                        if tk > ne:
+                            continue
+                        for grp in S["group_topk"]:
                             if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
                                 continue
                             r = _benchmark_topk_one(
-                                nt, ne, tk, sf, False, grp,
+                                nt, ne, tk, sf_kernel, use_pre, grp,
                                 dtype=args.dtype,
                                 test_pass=args.test_pass,
                                 warmup=warmup,
                                 iters=iters,
                             )
                             _print_bench_row(r)
+                            results.append(r)
 
     print()
+    return results
 
 
-def aux_loss_benchmark_suite(args) -> None:
-    """Run aux loss score benchmark across configurations."""
+def aux_loss_benchmark_suite(args) -> List[Dict]:
+    """Run aux loss score benchmark across configurations.  Returns list of result dicts."""
     warmup = args.warmup
     iters = args.iters
+    results: List[Dict] = []
 
     if args.user_specified:
         token_list = (
             [args.num_tokens] if args.num_tokens is not None
-            else [128, 512, 2048, 8192, 32768, 131072]
+            else USER_TOKEN_SWEEP_BENCHMARK
         )
+        sf_kernel, _ = _split_score_function(args.score_function)
         print(
             f"\nBenchmarking {len(token_list)} aux_loss config(s) "
             f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n"
@@ -1127,48 +1300,56 @@ def aux_loss_benchmark_suite(args) -> None:
                 num_tokens=nt,
                 num_experts=args.num_experts,
                 topk=args.topk,
-                score_function=args.score_function,
+                score_function=sf_kernel,
                 dtype=args.dtype,
                 test_pass=args.test_pass,
                 warmup=warmup,
                 iters=iters,
             )
             _print_bench_row(r)
+            results.append(r)
     else:
-        sweep_tokens = [128, 512, 8192, 32768, 131072]
-        sweep_experts = [8, 256, 512, 2304]
-        sweep_topk = [1, 4, 8, 32, 36]
-        sweep_sf = ["softmax", "sigmoid"]
+        S = SWEEP_BENCHMARK
+        # Aux loss doesn't use pre-softmax, so deduplicate.
+        aux_sf_kernels = []
+        seen = set()
+        for sf_name in S["score_functions"]:
+            sf_kernel, _ = _split_score_function(sf_name)
+            if sf_kernel not in seen:
+                aux_sf_kernels.append(sf_kernel)
+                seen.add(sf_kernel)
 
         total = 0
-        for nt in sweep_tokens:
-            for ne in sweep_experts:
-                for tk in sweep_topk:
-                    if tk > ne:
-                        continue
-                    for sf in sweep_sf:
+        for sf_kernel in aux_sf_kernels:
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
+                        if tk > ne:
+                            continue
                         total += 1
 
         print(f"\nRunning {total} aux_loss benchmark configs "
               f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n")
         _print_bench_header()
 
-        for nt in sweep_tokens:
-            for ne in sweep_experts:
-                for tk in sweep_topk:
-                    if tk > ne:
-                        continue
-                    for sf in sweep_sf:
+        for sf_kernel in aux_sf_kernels:
+            for nt in S["tokens"]:
+                for ne in S["experts"]:
+                    for tk in S["topk"]:
+                        if tk > ne:
+                            continue
                         r = _benchmark_aux_loss_one(
-                            nt, ne, tk, sf,
+                            nt, ne, tk, sf_kernel,
                             dtype=args.dtype,
                             test_pass=args.test_pass,
                             warmup=warmup,
                             iters=iters,
                         )
                         _print_bench_row(r)
+                        results.append(r)
 
     print()
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -1179,7 +1360,7 @@ def _any_kernel_arg_set(argv: List[str]) -> bool:
     """Return True if the user passed any kernel-shape / config flag on the CLI."""
     kernel_flags = {
         "--num-tokens", "--num-experts", "--topk", "--score-function",
-        "--use-pre-softmax", "--num-groups", "--group-topk",
+        "--num-groups", "--group-topk",
         "--scaling-factor", "--enable-bias", "--input-type",
     }
     for arg in argv:
@@ -1215,8 +1396,9 @@ def main():
                         help="Number of tokens (omit to sweep token counts)")
     parser.add_argument("--num-experts", type=int, default=128)
     parser.add_argument("--topk", type=int, default=4)
-    parser.add_argument("--score-function", choices=["softmax", "sigmoid"], default="softmax")
-    parser.add_argument("--use-pre-softmax", action="store_true", default=False)
+    parser.add_argument("--score-function", choices=ALL_SCORE_FUNCTIONS,
+                        default="softmax",
+                        help="Score function: pre-softmax, softmax, sigmoid, sqrtsoftplus")
     parser.add_argument("--num-groups", type=int, default=0)
     parser.add_argument("--group-topk", type=int, default=0)
     parser.add_argument("--scaling-factor", type=float, default=1.0)
@@ -1241,6 +1423,10 @@ def main():
     parser.add_argument("--iters", type=int, default=100,
                         help="Timed iterations for benchmark")
 
+    # Output
+    parser.add_argument("--csv", type=str, default=None, metavar="FILE",
+                        help="Write benchmark results to a CSV file")
+
     args = parser.parse_args()
 
     # Decide single-config vs full sweep
@@ -1258,11 +1444,15 @@ def main():
         if run_aux:
             ok = aux_loss_correctness_suite(args) and ok
 
+    all_bench_results: List[Dict] = []
     if args.mode in ("benchmark", "all"):
         if run_topk:
-            topk_benchmark_suite(args)
+            all_bench_results.extend(topk_benchmark_suite(args))
         if run_aux:
-            aux_loss_benchmark_suite(args)
+            all_bench_results.extend(aux_loss_benchmark_suite(args))
+
+    if args.csv and all_bench_results:
+        _write_csv(all_bench_results, args.csv)
 
     sys.exit(0 if ok else 1)
 

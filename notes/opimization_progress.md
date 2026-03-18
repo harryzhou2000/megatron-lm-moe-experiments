@@ -139,3 +139,219 @@ Benchmarking 6 topk config(s) (warmup=20, iters=100, dtype=torch.float32, pass=f
     topk    32768    2304   36  softmax   True      0  float32 forward   42.1016    3.8291    0.09x       778308
     topk   131072    2304   36  softmax   True      0  float32 forward  165.9964   15.4713    0.09x       789608
 ```
+
+#### Machine #2, after cherry-pick
+
+```log
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 aux_loss correctness test(s) with user config (dtype=torch.float32, pass=forward)...
+
+  PASS [aux_loss forward | softmax | tokens=     1 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=    64 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=   512 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=  2048 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=  8192 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens= 32768 | experts= 128 | topk=4 | dtype=torch.float32 | input=arange]
+
+Aux loss correctness: 6/6 passed
+
+
+Benchmarking 6 aux_loss config(s) (warmup=20, iters=100, dtype=torch.float32, pass=forward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+aux_loss      128     128    4  softmax  False      0  float32 forward    0.0167    0.0391    2.35x      7682557
+aux_loss      512     128    4  softmax  False      0  float32 forward    0.0165    0.0384    2.32x     30944184
+aux_loss     2048     128    4  softmax  False      0  float32 forward    0.0183    0.0439    2.40x    112062477
+aux_loss     8192     128    4  softmax  False      0  float32 forward    0.0476    0.0779    1.64x    171977135
+aux_loss    32768     128    4  softmax  False      0  float32 forward    0.1619    0.2154    1.33x    202441563
+aux_loss   131072     128    4  softmax  False      0  float32 forward    0.6134    0.8174    1.33x    213680789
+
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 aux_loss correctness test(s) with user config (dtype=torch.float32, pass=forward)...
+
+  PASS [aux_loss forward | softmax | tokens=     1 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=    64 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=   512 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=  2048 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens=  8192 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss forward | softmax | tokens= 32768 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+
+Aux loss correctness: 6/6 passed
+
+
+Benchmarking 6 aux_loss config(s) (warmup=20, iters=100, dtype=torch.float32, pass=forward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+aux_loss      128    2304   36  softmax  False      0  float32 forward    0.0627    0.0503    0.80x      2042254
+aux_loss      512    2304   36  softmax  False      0  float32 forward    0.0616    0.0978    1.59x      8311472
+aux_loss     2048    2304   36  softmax  False      0  float32 forward    0.1021    0.2086    2.04x     20055027
+aux_loss     8192    2304   36  softmax  False      0  float32 forward    0.3861    0.5716    1.48x     21215727
+aux_loss    32768    2304   36  softmax  False      0  float32 forward    1.5466    2.1288    1.38x     21187678
+aux_loss   131072    2304   36  softmax  False      0  float32 forward    6.1951    8.5068    1.37x     21157205
+
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 topk correctness test(s) with user config (dtype=torch.float32, pass=forward)...
+
+  PASS [topk forward | softmax | tokens=     1 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=    64 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=   512 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=  2048 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=  8192 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens= 32768 | experts= 128 | topk=4 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+
+Topk correctness: 6/6 passed
+
+
+Benchmarking 6 topk config(s) (warmup=20, iters=100, dtype=torch.float32, pass=forward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+    topk      128     128    4  softmax   True      0  float32 forward    0.0175    0.0603    3.43x      7294212
+    topk      512     128    4  softmax   True      0  float32 forward    0.0185    0.0575    3.11x     27665387
+    topk     2048     128    4  softmax   True      0  float32 forward    0.0186    0.0620    3.33x    110116997
+    topk     8192     128    4  softmax   True      0  float32 forward    0.0501    0.0983    1.96x    163578278
+    topk    32768     128    4  softmax   True      0  float32 forward    0.1673    0.2424    1.45x    195864661
+    topk   131072     128    4  softmax   True      0  float32 forward    0.6322    0.8719    1.38x    207342430
+
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 topk correctness test(s) with user config (dtype=torch.float32, pass=forward)...
+
+  PASS [topk forward | softmax | tokens=     1 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=    64 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=   512 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=  2048 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens=  8192 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk forward | softmax | tokens= 32768 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+
+Topk correctness: 6/6 passed
+
+
+Benchmarking 6 topk config(s) (warmup=20, iters=100, dtype=torch.float32, pass=forward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+    topk      128    2304   36  softmax   True      0  float32 forward    0.0699    0.0687    0.98x      1830463
+    topk      512    2304   36  softmax   True      0  float32 forward    0.0698    0.1185    1.70x      7335277
+    topk     2048    2304   36  softmax   True      0  float32 forward    0.1069    0.2360    2.21x     19166440
+    topk     8192    2304   36  softmax   True      0  float32 forward    0.3580    0.6370    1.78x     22883643
+    topk    32768    2304   36  softmax   True      0  float32 forward    1.5512    2.3171    1.49x     21124774
+    topk   131072    2304   36  softmax   True      0  float32 forward    6.3070    9.2130    1.46x     20781839
+
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 aux_loss correctness test(s) with user config (dtype=torch.float32, pass=backward)...
+
+  PASS [aux_loss backward | softmax | tokens=     1 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss backward | softmax | tokens=    64 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss backward | softmax | tokens=   512 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss backward | softmax | tokens=  2048 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss backward | softmax | tokens=  8192 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+  PASS [aux_loss backward | softmax | tokens= 32768 | experts=2304 | topk=36 | dtype=torch.float32 | input=arange]
+
+Aux loss correctness: 6/6 passed
+
+
+Benchmarking 6 aux_loss config(s) (warmup=20, iters=100, dtype=torch.float32, pass=backward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+aux_loss      128    2304   36  softmax  False      0  float32 backward    0.4073    0.3906    0.96x       314278
+aux_loss      512    2304   36  softmax  False      0  float32 backward    0.4299    0.3109    0.72x      1191057
+aux_loss     2048    2304   36  softmax  False      0  float32 backward    0.4464    0.3631    0.81x      4587380
+aux_loss     8192    2304   36  softmax  False      0  float32 backward    0.4800    0.3966    0.83x     17066212
+aux_loss    32768    2304   36  softmax  False      0  float32 backward    1.0340    0.7279    0.70x     31690777
+aux_loss   131072    2304   36  softmax  False      0  float32 backward    3.2573    2.2048    0.68x     40240069
+
+========================================================================
+Device 0: NVIDIA B300 SXM6 AC
+  Compute capability : 10.3
+  SMs                : 148
+  Global memory      : 267.7 GiB
+  (shared mem info unavailable)
+  CUDA version       : 13.1
+  PyTorch version    : 2.11.0a0+eb65b36914.nv26.02
+========================================================================
+
+Running 6 topk correctness test(s) with user config (dtype=torch.float32, pass=backward)...
+
+  PASS [topk backward | softmax | tokens=     1 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk backward | softmax | tokens=    64 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk backward | softmax | tokens=   512 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  PASS [topk backward | softmax | tokens=  2048 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+  FAIL [topk backward | softmax | tokens=  8192 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+       grad max abs diff  : 4.842388e-04
+       grad mean abs diff : 1.421888e-08
+       Tensor-likes are not close!
+
+Mismatched elements: 554 / 18874368 (0.0%)
+Greatest absolute difference: 0.0004842388443648815 at index (7617, 2269) (up to 1e-05 allowed)
+Greatest relative difference: 57.265357971191406 at index (7703, 2268) (up to 1.3e-06 allowed)
+  FAIL [topk backward | softmax | tokens= 32768 | experts=2304 | topk=36 | pre_sm=True | grp_topk=0 | scale=1.0 | bias=False | dtype=torch.float32 | input=arange]
+       grad max abs diff  : 4.842830e-04
+       grad mean abs diff : 7.981259e-08
+       Tensor-likes are not close!
+
+Mismatched elements: 12442 / 75497472 (0.0%)
+Greatest absolute difference: 0.00048428302397951484 at index (2090, 2270) (up to 1e-05 allowed)
+Greatest relative difference: 57.26610565185547 at index (1878, 2268) (up to 1.3e-06 allowed)
+
+Topk correctness: 4/6 passed
+
+
+Benchmarking 6 topk config(s) (warmup=20, iters=100, dtype=torch.float32, pass=backward)...
+
+  kernel   tokens experts topk score_fn pre_sm grp_tk    dtype    pass  fused_ms    ref_ms speedup        tok/s
+---------------------------------------------------------------------------------------------------------------
+    topk      128    2304   36  softmax   True      0  float32 backward    0.3828    0.4522    1.18x       334356
+    topk      512    2304   36  softmax   True      0  float32 backward    0.4323    0.4272    0.99x      1184416
+    topk     2048    2304   36  softmax   True      0  float32 backward    0.4728    0.4304    0.91x      4331331
+    topk     8192    2304   36  softmax   True      0  float32 backward    0.5955    0.4625    0.78x     13756097
+    topk    32768    2304   36  softmax   True      0  float32 backward    1.7476    0.8116    0.46x     18749854
+    topk   131072    2304   36  softmax   True      0  float32 backward    6.0583    2.3994    0.40x     21634987
+```
