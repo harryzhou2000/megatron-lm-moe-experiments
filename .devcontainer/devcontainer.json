@@ -1,6 +1,6 @@
 {
     "name": "TransformerEngine Dev",
-    "image": "harryzhou2000/pytorch:26.02-py3_v1",
+    "image": "docker.io/harryzhou2000/pytorch:26.02-py3_v1",
     "workspaceFolder": "/workspace/moe",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/moe,type=bind,consistency=cached",
     "runArgs": [

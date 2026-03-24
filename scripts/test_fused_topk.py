@@ -62,8 +62,6 @@ Usage
 import argparse
 import csv
 import sys
-import time
-from copy import deepcopy
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -103,6 +101,18 @@ def _join_score_function(score_function: str, use_pre_softmax: bool) -> str:
     if score_function == "softmax" and use_pre_softmax:
         return "pre-softmax"
     return score_function
+
+
+def _dedup_aux_loss_score_functions(names: List[str]) -> List[str]:
+    """Deduplicate score function names for aux loss (pre-softmax -> softmax)."""
+    seen: set = set()
+    result: List[str] = []
+    for name in names:
+        sf_kernel, _ = _split_score_function(name)
+        if sf_kernel not in seen:
+            result.append(sf_kernel)
+            seen.add(sf_kernel)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -689,17 +699,9 @@ def run_aux_loss_correctness(
                 raise _NaNDetected()
             # Check scores (full [T, E] tensor)
             torch.testing.assert_close(ref_scores, fused_scores, **tol_kw)
-            # Check routing map -- allow tie-break differences
-            map_match = (ref_map == fused_map).all().item()
-            if not map_match:
-                # For aux loss, the scores are identical (just checked above),
-                # so routing_map differences are tie-breaking in topk.
-                total_map_mismatches = (ref_map != fused_map).sum().item()
-                n_diff_tokens = (ref_map != fused_map).any(dim=1).sum().item()
-                # Verify the differences are at tied score boundaries
-                _, ref_top_indices = torch.topk(ref_scores.detach(), k=topk, dim=1)
-                # If scores match, any map diff is tie-breaking -- accept it.
-                pass  # scores already verified above, ties are acceptable
+            # Routing map tie-break differences are acceptable: scores (the
+            # full [T, E] tensor) have already been verified identical above,
+            # so any routing_map disagreement is purely topk tie-breaking.
 
         # --- Backward check ---
         if test_pass in ("backward", "both"):
@@ -872,14 +874,7 @@ def aux_loss_correctness_suite(args) -> bool:
             passed += int(ok)
     else:
         S = SWEEP_CORRECTNESS
-        # Aux loss doesn't use pre-softmax, so deduplicate: pre-softmax -> softmax
-        aux_sf_kernels = []
-        seen = set()
-        for sf_name in S["score_functions"]:
-            sf_kernel, _ = _split_score_function(sf_name)
-            if sf_kernel not in seen:
-                aux_sf_kernels.append(sf_kernel)
-                seen.add(sf_kernel)
+        aux_sf_kernels = _dedup_aux_loss_score_functions(S["score_functions"])
 
         configs: List[Dict] = []
         for sf_kernel in aux_sf_kernels:
@@ -1237,23 +1232,7 @@ def topk_benchmark_suite(args) -> List[Dict]:
             results.append(r)
     else:
         S = SWEEP_BENCHMARK
-        total = 0
-        for sf_name in S["score_functions"]:
-            sf_kernel, _ = _split_score_function(sf_name)
-            for nt in S["tokens"]:
-                for ne in S["experts"]:
-                    for tk in S["topk"]:
-                        if tk > ne:
-                            continue
-                        for grp in S["group_topk"]:
-                            if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
-                                continue
-                            total += 1
-
-        print(f"\nRunning {total} topk benchmark configs "
-              f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n")
-        _print_bench_header()
-
+        configs: List[Dict] = []
         for sf_name in S["score_functions"]:
             sf_kernel, use_pre = _split_score_function(sf_name)
             for nt in S["tokens"]:
@@ -1264,15 +1243,26 @@ def topk_benchmark_suite(args) -> List[Dict]:
                         for grp in S["group_topk"]:
                             if grp > 0 and not _valid_group_topk(ne, tk, 8, grp):
                                 continue
-                            r = _benchmark_topk_one(
-                                nt, ne, tk, sf_kernel, use_pre, grp,
-                                dtype=args.dtype,
-                                test_pass=args.test_pass,
-                                warmup=warmup,
-                                iters=iters,
-                            )
-                            _print_bench_row(r)
-                            results.append(r)
+                            configs.append(dict(
+                                num_tokens=nt, num_experts=ne, topk=tk,
+                                score_function=sf_kernel, use_pre_softmax=use_pre,
+                                group_topk=grp,
+                            ))
+
+        print(f"\nRunning {len(configs)} topk benchmark configs "
+              f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n")
+        _print_bench_header()
+
+        for cfg in configs:
+            r = _benchmark_topk_one(
+                **cfg,
+                dtype=args.dtype,
+                test_pass=args.test_pass,
+                warmup=warmup,
+                iters=iters,
+            )
+            _print_bench_row(r)
+            results.append(r)
 
     print()
     return results
@@ -1310,43 +1300,34 @@ def aux_loss_benchmark_suite(args) -> List[Dict]:
             results.append(r)
     else:
         S = SWEEP_BENCHMARK
-        # Aux loss doesn't use pre-softmax, so deduplicate.
-        aux_sf_kernels = []
-        seen = set()
-        for sf_name in S["score_functions"]:
-            sf_kernel, _ = _split_score_function(sf_name)
-            if sf_kernel not in seen:
-                aux_sf_kernels.append(sf_kernel)
-                seen.add(sf_kernel)
+        aux_sf_kernels = _dedup_aux_loss_score_functions(S["score_functions"])
 
-        total = 0
+        configs: List[Dict] = []
         for sf_kernel in aux_sf_kernels:
             for nt in S["tokens"]:
                 for ne in S["experts"]:
                     for tk in S["topk"]:
                         if tk > ne:
                             continue
-                        total += 1
+                        configs.append(dict(
+                            num_tokens=nt, num_experts=ne, topk=tk,
+                            score_function=sf_kernel,
+                        ))
 
-        print(f"\nRunning {total} aux_loss benchmark configs "
+        print(f"\nRunning {len(configs)} aux_loss benchmark configs "
               f"(warmup={warmup}, iters={iters}, dtype={args.dtype}, pass={args.test_pass})...\n")
         _print_bench_header()
 
-        for sf_kernel in aux_sf_kernels:
-            for nt in S["tokens"]:
-                for ne in S["experts"]:
-                    for tk in S["topk"]:
-                        if tk > ne:
-                            continue
-                        r = _benchmark_aux_loss_one(
-                            nt, ne, tk, sf_kernel,
-                            dtype=args.dtype,
-                            test_pass=args.test_pass,
-                            warmup=warmup,
-                            iters=iters,
-                        )
-                        _print_bench_row(r)
-                        results.append(r)
+        for cfg in configs:
+            r = _benchmark_aux_loss_one(
+                **cfg,
+                dtype=args.dtype,
+                test_pass=args.test_pass,
+                warmup=warmup,
+                iters=iters,
+            )
+            _print_bench_row(r)
+            results.append(r)
 
     print()
     return results
