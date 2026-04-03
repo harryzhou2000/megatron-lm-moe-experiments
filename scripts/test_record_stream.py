@@ -3,255 +3,359 @@
 # See LICENSE for license information.
 
 """
-Demonstrates the necessity of ``torch.Tensor.record_stream`` when a tensor
-produced on one CUDA stream is consumed on another.
+Demonstrates the necessity of ``torch.Tensor.record_stream`` and explicit
+event synchronisation when a tensor produced on one CUDA stream is consumed
+on another.
 
-Setup
+Reference
+---------
+Based on the pattern from PyTorch's own ``test_record_stream`` in
+``test/test_cuda.py`` (see ``pytorch/pytorch`` on GitHub).
+
+Strategy
+--------
+Two explicit (non-default) CUDA streams are used:
+
+*  **producer_stream** — fills ``tmp`` from a pre-populated ``source`` buffer,
+   then (after a short sleep) overwrites ``tmp`` with a poison value.
+*  **consumer_stream** — reads ``tmp`` into ``result`` after a deliberately
+   long ``torch.cuda._sleep`` delay.
+
+After a fork point (the consumer waits for the producer's fill via
+``wait_event``), both streams run **concurrently**:
+
+*  consumer_stream: long sleep (200 ms) → ``result.copy_(tmp)``
+*  producer_stream: short sleep (10 ms) → ``tmp.copy_(poison)``
+
+Because the producer's sleep is much shorter, the overwrite lands **before**
+the consumer reads ``tmp`` — corrupting the result.
+
+Two independent protection mechanisms are tested:
+
+1.  **record_stream** — ``tmp.record_stream(consumer_stream)`` tells the
+    caching allocator that ``tmp``'s memory block is in use on
+    ``consumer_stream``.  This is an **allocator-level** hint; it does **not**
+    add kernel-ordering dependencies.
+2.  **event_sync** — ``producer_stream.wait_event(consumer_done)`` before the
+    overwrite.  This is a **kernel-ordering** dependency that forces the
+    producer to wait for the consumer to finish reading.
+
+This yields **four** test cases per mode:
+
++------------------+------------+-----------------------------------------------+
+| record_stream    | event_sync | Expected result                               |
++==================+============+===============================================+
+| No               | No         | Corruption — no protection at all             |
++------------------+------------+-----------------------------------------------+
+| Yes              | No         | Corruption — allocator hint alone cannot      |
+|                  |            | order kernels                                 |
++------------------+------------+-----------------------------------------------+
+| No               | Yes        | Correct — event sync orders the kernels       |
++------------------+------------+-----------------------------------------------+
+| Yes              | Yes        | Correct — both protections active             |
++------------------+------------+-----------------------------------------------+
+
+Modes
 -----
-*  **Producer stream** – allocates a tensor and fills it with a known pattern
-   via an async kernel, then (optionally) frees its Python reference so the
-   CUDA caching allocator may reclaim the memory.
-*  **Consumer stream** – reads that tensor *after* explicitly waiting on a
-   producer event, so kernel ordering is correct.  The race is purely between
-   the Python-level allocator and the consumer kernel.
-
-Without ``record_stream``
-~~~~~~~~~~~~~~~~~~~~~~~~~
-The caching allocator only tracks the *producer* stream.  Once the Python
-reference is deleted the allocator considers the memory reusable – even though
-the consumer kernel has not yet executed.  A new allocation on the producer
-stream can overwrite the buffer *before* the consumer reads it, corrupting the
-result.
-
-With ``record_stream``
-~~~~~~~~~~~~~~~~~~~~~~
-``record_stream(consumer_stream)`` tells the allocator that the buffer is also
-in use on *consumer_stream*, so the memory is not recycled until the consumer
-kernel finishes.
+*  **Eager** (default) — ``enqueue_work`` is called directly, twice.
+*  **CUDA graph** (``--cuda-graph``) — ``enqueue_work`` is captured into a
+   ``torch.cuda.CUDAGraph`` and replayed twice.
 
 Usage::
 
-    python scripts/test_record_stream.py              # run both modes
-    python scripts/test_record_stream.py --use-record-stream   # only the safe path
-    python scripts/test_record_stream.py --no-record-stream    # only the unsafe path
+    # Eager mode — all 4 cases
+    python scripts/test_record_stream.py
+
+    # CUDA-graph mode — all 4 cases
+    python scripts/test_record_stream.py --cuda-graph
+
+    # Filter to specific combination
+    python scripts/test_record_stream.py --use-record-stream --event-sync
+    python scripts/test_record_stream.py --cuda-graph --no-record-stream --no-event-sync
 """
 
 import argparse
 import sys
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 
 
 # ---------------------------------------------------------------------------
-# Constants
+# Helpers
 # ---------------------------------------------------------------------------
-_FILL_VALUE: float = 42.0
-_OVERWRITE_VALUE: float = -1.0
-_TENSOR_NUMEL: int = 1 << 20  # 1 M elements – large enough to matter
-_NUM_CORRUPTION_ATTEMPTS: int = 200  # repeat to increase race probability
-_DTYPE: torch.dtype = torch.float32
+
+def _get_cycles_per_ms() -> float:
+    """Calibrate ``torch.cuda._sleep`` so we can request a wall-clock delay."""
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    torch.cuda._sleep(1_000_000)
+    end.record()
+    end.synchronize()
+    return 1_000_000 / start.elapsed_time(end)
 
 
-def _make_producer_payload(
-    producer_stream: torch.cuda.Stream,
-    size: int,
-    fill: float,
-) -> Tuple[torch.Tensor, torch.cuda.Event]:
-    """Allocate and fill a tensor on *producer_stream*, return it with an event."""
-    with torch.cuda.stream(producer_stream):
-        tensor = torch.full((size,), fill, device="cuda", dtype=_DTYPE)
-        event = producer_stream.record_event()
-    return tensor, event
+# ---------------------------------------------------------------------------
+# Core test logic
+# ---------------------------------------------------------------------------
 
-
-def _try_reclaim_and_overwrite(
-    producer_stream: torch.cuda.Stream,
-    data_ptr: int,
-    size: int,
-    overwrite: float,
-    num_allocs: int = 8,
-) -> None:
-    """Aggressively allocate on *producer_stream* hoping to reclaim *data_ptr*.
-
-    We allocate several tensors of the same size; because the caching allocator
-    uses a best-fit policy, one of them is likely to land on the same block.
-    """
-    with torch.cuda.stream(producer_stream):
-        for _ in range(num_allocs):
-            t = torch.full((size,), overwrite, device="cuda", dtype=_DTYPE)
-            if t.data_ptr() == data_ptr:
-                # Intentionally keep this allocation alive so it stays
-                # overwritten for the consumer to observe.
-                return
-            del t
-
-
-def _run_single_trial(
-    producer_stream: torch.cuda.Stream,
-    consumer_stream: torch.cuda.Stream,
+def run_test(
     use_record_stream: bool,
-) -> Optional[torch.Tensor]:
-    """Run one producer/consumer hand-off and return the value the consumer saw.
+    use_event_sync: bool,
+    use_cuda_graph: bool,
+) -> bool:
+    """Run a single test case.
 
-    Returns ``None`` when the allocator did not reclaim the block (no
-    corruption opportunity).
+    Parameters
+    ----------
+    use_record_stream : bool
+        Call ``tmp.record_stream(consumer_stream)``.
+    use_event_sync : bool
+        Insert ``producer_stream.wait_event(consumer_done)`` before the
+        producer overwrites ``tmp``.
+    use_cuda_graph : bool
+        If True, capture ``enqueue_work`` into a CUDA graph and replay it;
+        otherwise call it directly.
+
+    Returns
+    -------
+    data_correct : bool
     """
-    # 1. Produce
-    tensor, event = _make_producer_payload(producer_stream, _TENSOR_NUMEL, _FILL_VALUE)
-    saved_ptr = tensor.data_ptr()
+    cycles_per_ms = _get_cycles_per_ms()
 
-    if use_record_stream:
-        tensor.record_stream(consumer_stream)
+    numel = (1 << 20) * 1024
+    host_tensor = torch.arange(numel, dtype=torch.float32).pin_memory()
 
-    # 2. Consumer waits on the producer event so **kernel** ordering is correct.
-    consumer_stream.wait_event(event)
+    producer_stream = torch.cuda.Stream()
+    consumer_stream = torch.cuda.Stream()
 
-    # 3. Schedule the consumer read *before* we free the reference – but the
-    #    read kernel has not executed yet (it is merely enqueued).
+    # --- Pre-allocate all static tensors ----------------------------------
+    with torch.cuda.stream(producer_stream):
+        source = torch.empty(numel, device="cuda", dtype=torch.float32)
+
+        poison = torch.full((numel,), -1.0, device="cuda", dtype=torch.float32)
+
     with torch.cuda.stream(consumer_stream):
-        # .clone() forces a read of every element on consumer_stream.
-        consumer_copy = tensor.clone()
+        result = torch.empty(numel, device="cuda", dtype=torch.float32)
 
-    # 4. Drop the only Python reference – the allocator may now reuse the
-    #    block on *producer_stream* (unless record_stream was called).
-    del tensor
-
-    # 5. Empty the cache to force the allocator to truly free blocks that are
-    #    no longer tracked, maximising the chance of reuse.
-    torch.cuda.memory.empty_cache()
-
-    # 6. Overwrite on the producer stream – this races with the consumer read.
-    _try_reclaim_and_overwrite(
-        producer_stream, saved_ptr, _TENSOR_NUMEL, _OVERWRITE_VALUE
-    )
-
-    # 7. Synchronise everything and check what the consumer actually saw.
     torch.cuda.synchronize()
-    return consumer_copy
+
+    # Populate source with the host data once (constant across iterations).
+    source.copy_(host_tensor.cuda())
+
+    # --- Multi-stream work (shared by eager and graph paths) --------------
+    def enqueue_work():
+        """Enqueue the full producer → consumer → overwrite pipeline.
+
+        After the fork:
+        *  consumer_stream sleeps 200 ms then reads tmp into result.
+        *  producer_stream sleeps  10 ms then overwrites tmp with poison.
+        The producer finishes first → overwrites tmp before consumer reads it.
+
+        When *use_event_sync* is True the producer waits for the consumer
+        to finish reading before overwriting, preventing corruption.
+        """
+        # 1. Producer fills tmp from source.
+        with torch.cuda.stream(producer_stream):
+            tmp = torch.empty(numel, device="cuda", dtype=torch.float32)
+            tmp.copy_(source)
+            prod_done = producer_stream.record_event()
+
+        # 2. Fork: consumer waits for producer's fill to complete.
+        consumer_stream.wait_event(prod_done)
+
+        # record_stream: tell the allocator that tmp is also in use on
+        # consumer_stream.  Placed here — after tmp is produced and before
+        # the consumer reads it — matching real-world usage.
+
+        # 3. Consumer: long sleep then read.
+        with torch.cuda.stream(consumer_stream):
+            torch.cuda._sleep(int(200 * cycles_per_ms))
+            result.copy_(tmp)
+            consumer_done = consumer_stream.record_event()
+
+        if use_record_stream:
+            tmp.record_stream(consumer_stream)
+        tmp.untyped_storage().resize_(0)
+
+        # 4. Producer overwrites tmp with poison.
+        with torch.cuda.stream(producer_stream):
+            if use_event_sync:
+                producer_stream.wait_event(consumer_done)
+            else:
+                torch.cuda._sleep(int(10 * cycles_per_ms))
+            tmp = torch.empty(numel, device="cuda", dtype=torch.float32)
+            tmp.copy_(poison)
+
+        # 5. Join consumer back to producer (required for graph capture;
+        #    harmless in eager mode).
+        producer_stream.wait_stream(consumer_stream)
+
+    # --- Execute ----------------------------------------------------------
+    if use_cuda_graph:
+        # Warm-up (required before capture).
+        enqueue_work()
+        torch.cuda.synchronize()
+
+        # Capture.
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.stream(producer_stream):
+            graph.capture_begin()
+        enqueue_work()
+        with torch.cuda.stream(producer_stream):
+            graph.capture_end()
+        torch.cuda.synchronize()
+
+        # Replay.
+        data_correct = True
+        for _i in range(2):
+            graph.replay()
+            torch.cuda.synchronize()
+            if not torch.equal(result, source):
+                data_correct = False
+    else:
+        # Eager: run directly.
+        data_correct = True
+        for _i in range(2):
+            enqueue_work()
+            torch.cuda.synchronize()
+            if not torch.equal(result, source):
+                data_correct = False
+
+    return data_correct
 
 
 # ---------------------------------------------------------------------------
-# Test drivers
+# Test matrix
 # ---------------------------------------------------------------------------
 
+_CASES = [
+    # (record_stream, event_sync, label, expect_correct)
+    (False, False, "no record_stream, no event_sync", False),
+    (True,  False, "record_stream,    no event_sync", False),
+    (False, True,  "no record_stream, event_sync",    True),
+    (True,  True,  "record_stream,    event_sync",    True),
+]
 
-def test_without_record_stream() -> bool:
-    """Expect corruption in at least one trial (returns True on corruption)."""
-    producer = torch.cuda.Stream()
-    consumer = torch.cuda.Stream()
 
-    corrupted = False
-    for trial in range(_NUM_CORRUPTION_ATTEMPTS):
-        result = _run_single_trial(producer, consumer, use_record_stream=False)
-        if result is None:
+def run_all_cases(
+    use_cuda_graph: bool,
+    record_stream_filter: Optional[bool] = None,
+    event_sync_filter: Optional[bool] = None,
+) -> bool:
+    """Run up to 4 cases.  Returns True if all behave as expected."""
+    all_ok = True
+
+    for use_rs, use_es, label, expect_correct in _CASES:
+        if record_stream_filter is not None and use_rs != record_stream_filter:
             continue
-        if not torch.all(result == _FILL_VALUE).item():
-            n_bad = int((result != _FILL_VALUE).sum().item())
-            print(
-                f"  [trial {trial:>3d}] CORRUPTION detected – "
-                f"{n_bad}/{_TENSOR_NUMEL} elements differ"
-            )
-            corrupted = True
-            break  # one is enough to prove the point
-
-    if not corrupted:
-        print(
-            f"  No corruption observed after {_NUM_CORRUPTION_ATTEMPTS} trials.\n"
-            "  (The race is timing-dependent; try increasing _NUM_CORRUPTION_ATTEMPTS\n"
-            "   or running on a busier GPU.)"
-        )
-    return corrupted
-
-
-def test_with_record_stream() -> bool:
-    """All trials must pass (returns True when every trial is clean)."""
-    producer = torch.cuda.Stream()
-    consumer = torch.cuda.Stream()
-
-    all_clean = True
-    for trial in range(_NUM_CORRUPTION_ATTEMPTS):
-        result = _run_single_trial(producer, consumer, use_record_stream=True)
-        if result is None:
+        if event_sync_filter is not None and use_es != event_sync_filter:
             continue
-        if not torch.all(result == _FILL_VALUE).item():
-            n_bad = int((result != _FILL_VALUE).sum().item())
-            print(
-                f"  [trial {trial:>3d}] UNEXPECTED corruption – "
-                f"{n_bad}/{_TENSOR_NUMEL} elements differ"
-            )
-            all_clean = False
-            break
 
-    if all_clean:
-        print(
-            f"  All {_NUM_CORRUPTION_ATTEMPTS} trials passed – "
-            "record_stream correctly prevented reuse."
+        print(f"  Case: {label}")
+        data_correct = run_test(
+            use_record_stream=use_rs,
+            use_event_sync=use_es,
+            use_cuda_graph=use_cuda_graph,
         )
-    return all_clean
+        status = "correct" if data_correct else "CORRUPTED"
+        expected = "correct" if expect_correct else "CORRUPTED"
+        match = (data_correct == expect_correct)
+        verdict = "PASS" if match else "FAIL"
+
+        print(f"    Data:     {status}")
+        print(f"    Expected: {expected}")
+        print(f"    Verdict:  {verdict}")
+
+        if not match:
+            all_ok = False
+
+    return all_ok
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Demonstrate record_stream necessity for cross-stream tensor safety.",
+        description="Demonstrate record_stream and event_sync for cross-stream tensor safety.",
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    rs_group = parser.add_mutually_exclusive_group()
+    rs_group.add_argument(
         "--use-record-stream",
         action="store_true",
-        help="Only run the safe (record_stream) test.",
+        default=False,
+        help="Filter: only cases with record_stream enabled.",
     )
-    group.add_argument(
+    rs_group.add_argument(
         "--no-record-stream",
         action="store_true",
-        help="Only run the unsafe (no record_stream) test.",
+        default=False,
+        help="Filter: only cases with record_stream disabled.",
+    )
+    es_group = parser.add_mutually_exclusive_group()
+    es_group.add_argument(
+        "--event-sync",
+        action="store_true",
+        default=False,
+        help="Filter: only cases with event sync enabled.",
+    )
+    es_group.add_argument(
+        "--no-event-sync",
+        action="store_true",
+        default=False,
+        help="Filter: only cases with event sync disabled.",
+    )
+    parser.add_argument(
+        "--cuda-graph",
+        action="store_true",
+        help="Capture multi-stream work in a CUDA graph and replay it.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
     if not torch.cuda.is_available():
-        print("CUDA is not available – nothing to test.")
+        print("CUDA is not available — nothing to test.")
         sys.exit(1)
 
-    # Warm up the CUDA context so first-allocation jitter doesn't dominate.
+    # Warm up the CUDA context.
     torch.cuda.synchronize()
     _ = torch.empty(1, device="cuda")
 
     args = _parse_args()
-    run_unsafe = not args.use_record_stream
-    run_safe = not args.no_record_stream
 
-    exit_code = 0
+    rs_filter: Optional[bool] = None
+    if args.use_record_stream:
+        rs_filter = True
+    elif args.no_record_stream:
+        rs_filter = False
 
-    if run_unsafe:
-        print("=" * 70)
-        print("TEST: without record_stream  (expect corruption)")
-        print("=" * 70)
-        corrupted = test_without_record_stream()
-        if not corrupted:
-            print("  WARNING: could not trigger corruption (race is timing-dependent).")
-            # Not a hard failure – the race may simply not fire on this hardware.
-        else:
-            print("  PASS – corruption confirmed (record_stream was needed).")
+    es_filter: Optional[bool] = None
+    if args.event_sync:
+        es_filter = True
+    elif args.no_event_sync:
+        es_filter = False
 
-    if run_safe:
-        print("=" * 70)
-        print("TEST: with record_stream  (expect clean)")
-        print("=" * 70)
-        clean = test_with_record_stream()
-        if not clean:
-            print("  FAIL – corruption despite record_stream!")
-            exit_code = 1
-        else:
-            print("  PASS – no corruption observed.")
+    mode = "CUDA GRAPH" if args.cuda_graph else "EAGER"
+    print("=" * 70)
+    print(f"{mode} MODE — record_stream x event_sync matrix")
+    print("=" * 70)
 
-    sys.exit(exit_code)
+    ok = run_all_cases(
+        use_cuda_graph=args.cuda_graph,
+        record_stream_filter=rs_filter,
+        event_sync_filter=es_filter,
+    )
+
+    if ok:
+        print("  All cases behaved as expected.\n")
+    else:
+        print("  Some cases did NOT behave as expected!\n")
+
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
