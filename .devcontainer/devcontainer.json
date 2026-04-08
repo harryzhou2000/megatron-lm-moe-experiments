@@ -1,14 +1,17 @@
 {
-    "name": "TransformerEngine Dev",
-    "image": "docker.io/harryzhou2000/pytorch:26.02-py3_v1",
+    "name": "MoE Dev",
+    // "image": "nvcr.io/nvidia/pytorch:26.03-py3",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
     "workspaceFolder": "/workspace/moe",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/moe,type=bind,consistency=cached",
     "runArgs": [
-        // "--gpus",
-        // "all" // Remove this line if no GPU on host
-        "--memory=16g", // Hard memory limit (match Docker Desktop setting)
-        "--memory-swap=20g", // Memory + swap
-        "--shm-size=1g" // Shared memory (needed by PyTorch DataLoader too)
+        "--gpus",
+        "all" // Remove this line if no GPU on host
+        // "--memory=16g", // Hard memory limit (match Docker Desktop setting)
+        // "--memory-swap=20g", // Memory + swap
+        // "--shm-size=1g" // Shared memory (needed by PyTorch DataLoader too)
     ],
     "customizations": {
         "vscode": {
@@ -34,7 +37,7 @@
     },
     // Run after container starts — generate compile_commands.json
     "postCreateCommand": {
-        "init_compile_commands": "NVTE_CUDA_ARCHS=\"90;100;120\" cd /workspace/moe/TE && git submodule update --init --recursive && cmake -S transformer_engine/common -B build/cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -GNinja && ln -sf build/cmake/compile_commands.json compile_commands.json",
+        "init_compile_commands": "NVTE_CUDA_ARCHS=\"80;90;100;\" cd /workspace/moe/TE && git submodule update --init --recursive && cmake -S transformer_engine/common -B build/cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -GNinja && ln -sf build/cmake/compile_commands.json compile_commands.json",
     },
     "remoteUser": "root"
 }

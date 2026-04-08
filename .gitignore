@@ -1,3 +1,4 @@
 *.log
 ~*.xlsx
 .DS_store
+venv
