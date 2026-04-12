@@ -121,8 +121,8 @@ def _dedup_aux_loss_score_functions(names: List[str]) -> List[str]:
 
 SWEEP_CORRECTNESS = dict(
     tokens=[1, 37, 512, 8192],
-    experts=[8, 33, 64, 256],
-    topk=[1, 4, 8],
+    experts=[32, 64, 256],
+    topk=[1, 4, 8, 32],
     score_functions=ALL_SCORE_FUNCTIONS,
     input_types=["arange", "random", "extreme", "narrow", "constant"],
     group_topk=[0, 4],
@@ -948,7 +948,50 @@ def _benchmark_topk_one(
         expert_bias=expert_bias,
     )
 
-    if test_pass == "forward":
+    if test_pass == "backward_raw":
+        # ----- Raw kernel-only backward benchmark -----
+        # Run forward once to get the saved tensors, then time the backward
+        # kernel call directly — no autograd, no loss.sum(), no grad allocation.
+        import transformer_engine_torch as tex
+
+        logits_fwd = torch.randn(num_tokens, num_experts, dtype=dtype, device="cuda")
+        _, routing_map, intermediate_output = tex.fused_topk_with_score_function_fwd(
+            logits_fwd, topk, use_pre_softmax,
+            8 if group_topk else 0, group_topk, 1.0, score_function, expert_bias,
+        )
+        grad_probs = torch.ones(num_tokens, num_experts, dtype=dtype, device="cuda")
+        grad_logits = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
+
+        bwd_args = dict(
+            routing_map=routing_map,
+            intermediate_output=intermediate_output,
+            grad_probs=grad_probs,
+            grad_logits=grad_logits,
+            topk=topk,
+            use_pre_softmax=use_pre_softmax,
+            scaling_factor=1.0,
+            score_function=score_function,
+        )
+        fused_ms = _time_kernel_only(
+            lambda: _topk_backward_raw_fused(**bwd_args), warmup, iters,
+        )
+
+        # Reference: equivalent PyTorch math, same inputs, no autograd
+        grad_logits_ref = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
+        ref_bwd_args = dict(
+            routing_map=routing_map,
+            intermediate_output=intermediate_output,
+            grad_probs=grad_probs,
+            grad_logits=grad_logits_ref,
+            topk=topk,
+            use_pre_softmax=use_pre_softmax,
+            scaling_factor=1.0,
+            score_function=score_function,
+        )
+        ref_ms = _time_kernel_only(
+            lambda: _topk_backward_raw_reference(**ref_bwd_args), warmup, iters,
+        )
+    elif test_pass == "forward":
         fused_ms = _time_forward(lambda: fused_topk_with_score_function(**call_args),
                                  warmup, iters)
     elif test_pass == "backward":
@@ -964,37 +1007,39 @@ def _benchmark_topk_one(
             warmup=warmup, iters=iters,
         )
 
-    # PyTorch reference
-    logits_ref = torch.randn(
-        num_tokens, num_experts, dtype=dtype, device="cuda", requires_grad=needs_grad,
-    )
-    ref_args = dict(
-        logits=logits_ref,
-        topk=topk,
-        use_pre_softmax=use_pre_softmax,
-        num_groups=8 if group_topk else 0,
-        group_topk=group_topk,
-        scaling_factor=1.0,
-        score_function=score_function,
-        expert_bias=expert_bias,
-    )
+    if test_pass != "backward_raw":
+        # PyTorch reference (autograd-based)
+        logits_ref = torch.randn(
+            num_tokens, num_experts, dtype=dtype, device="cuda", requires_grad=needs_grad,
+        )
+        ref_args = dict(
+            logits=logits_ref,
+            topk=topk,
+            use_pre_softmax=use_pre_softmax,
+            num_groups=8 if group_topk else 0,
+            group_topk=group_topk,
+            scaling_factor=1.0,
+            score_function=score_function,
+            expert_bias=expert_bias,
+        )
 
-    if test_pass == "forward":
-        ref_ms = _time_forward(lambda: reference_topk_forward(**ref_args), warmup, iters)
-    elif test_pass == "backward":
-        ref_ms = _time_backward(
-            lambda: reference_topk_forward(**ref_args),
-            loss_fn=lambda out: out[0].sum(),
-            warmup=warmup, iters=iters,
-        )
-    else:
-        ref_ms = _time_forward_backward(
-            lambda: reference_topk_forward(**ref_args),
-            loss_fn=lambda out: out[0].sum(),
-            warmup=warmup, iters=iters,
-        )
+        if test_pass == "forward":
+            ref_ms = _time_forward(lambda: reference_topk_forward(**ref_args), warmup, iters)
+        elif test_pass == "backward":
+            ref_ms = _time_backward(
+                lambda: reference_topk_forward(**ref_args),
+                loss_fn=lambda out: out[0].sum(),
+                warmup=warmup, iters=iters,
+            )
+        else:
+            ref_ms = _time_forward_backward(
+                lambda: reference_topk_forward(**ref_args),
+                loss_fn=lambda out: out[0].sum(),
+                warmup=warmup, iters=iters,
+            )
 
     sf_display = _join_score_function(score_function, use_pre_softmax)
+    nbytes = _compute_min_bytes(num_tokens, num_experts, topk, dtype, "topk", test_pass)
     return dict(
         kernel="topk",
         num_tokens=num_tokens,
@@ -1007,7 +1052,8 @@ def _benchmark_topk_one(
         fused_ms=fused_ms,
         ref_ms=ref_ms,
         speedup=ref_ms / fused_ms if fused_ms > 0 else float("inf"),
-        tokens_per_sec=num_tokens / (fused_ms / 1000),
+        fused_gbps=nbytes / (fused_ms * 1e-3) / 1e9 if fused_ms > 0 else 0.0,
+        ref_gbps=nbytes / (ref_ms * 1e-3) / 1e9 if ref_ms > 0 else 0.0,
     )
 
 
@@ -1029,7 +1075,40 @@ def _benchmark_aux_loss_one(
 
     call_args = dict(logits=logits, topk=topk, score_function=score_function)
 
-    if test_pass == "forward":
+    if test_pass == "backward_raw":
+        # Raw kernel-only backward benchmark for aux_loss
+        import transformer_engine_torch as tex
+
+        logits_fwd = torch.randn(num_tokens, num_experts, dtype=dtype, device="cuda")
+        scores, routing_map, intermediate_output = tex.fused_score_for_moe_aux_loss_fwd(
+            logits=logits_fwd, topk=topk, score_function=score_function,
+        )
+        grad_scores = torch.ones(num_tokens, num_experts, dtype=torch.float32, device="cuda")
+        grad_logits = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
+
+        def _fused_aux_bwd():
+            tex.fused_score_for_moe_aux_loss_bwd(
+                num_tokens=num_tokens, num_experts=num_experts,
+                intermediate_output=intermediate_output,
+                grad_scores=grad_scores, grad_logits=grad_logits,
+                topk=topk, score_function=score_function,
+            )
+
+        fused_ms = _time_kernel_only(_fused_aux_bwd, warmup, iters)
+
+        # Reference: equivalent PyTorch math, no autograd
+        grad_logits_ref = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
+
+        def _ref_aux_bwd():
+            _aux_loss_backward_raw_reference(
+                intermediate_output=intermediate_output,
+                grad_scores=grad_scores,
+                grad_logits=grad_logits_ref,
+                score_function=score_function,
+            )
+
+        ref_ms = _time_kernel_only(_ref_aux_bwd, warmup, iters)
+    elif test_pass == "forward":
         fused_ms = _time_forward(
             lambda: fused_compute_score_for_moe_aux_loss(**call_args), warmup, iters)
     elif test_pass == "backward":
@@ -1045,28 +1124,30 @@ def _benchmark_aux_loss_one(
             warmup=warmup, iters=iters,
         )
 
-    # PyTorch reference
-    logits_ref = torch.randn(
-        num_tokens, num_experts, dtype=dtype, device="cuda", requires_grad=needs_grad,
-    )
-    ref_args = dict(logits=logits_ref, topk=topk, score_function=score_function)
-
-    if test_pass == "forward":
-        ref_ms = _time_forward(
-            lambda: reference_aux_loss_scores_forward(**ref_args), warmup, iters)
-    elif test_pass == "backward":
-        ref_ms = _time_backward(
-            lambda: reference_aux_loss_scores_forward(**ref_args),
-            loss_fn=lambda out: out[1].sum(),
-            warmup=warmup, iters=iters,
+    if test_pass != "backward_raw":
+        # PyTorch reference (autograd-based)
+        logits_ref = torch.randn(
+            num_tokens, num_experts, dtype=dtype, device="cuda", requires_grad=needs_grad,
         )
-    else:
-        ref_ms = _time_forward_backward(
-            lambda: reference_aux_loss_scores_forward(**ref_args),
-            loss_fn=lambda out: out[1].sum(),
-            warmup=warmup, iters=iters,
-        )
+        ref_args = dict(logits=logits_ref, topk=topk, score_function=score_function)
 
+        if test_pass == "forward":
+            ref_ms = _time_forward(
+                lambda: reference_aux_loss_scores_forward(**ref_args), warmup, iters)
+        elif test_pass == "backward":
+            ref_ms = _time_backward(
+                lambda: reference_aux_loss_scores_forward(**ref_args),
+                loss_fn=lambda out: out[1].sum(),
+                warmup=warmup, iters=iters,
+            )
+        else:
+            ref_ms = _time_forward_backward(
+                lambda: reference_aux_loss_scores_forward(**ref_args),
+                loss_fn=lambda out: out[1].sum(),
+                warmup=warmup, iters=iters,
+            )
+
+    nbytes = _compute_min_bytes(num_tokens, num_experts, topk, dtype, "aux_loss", test_pass)
     return dict(
         kernel="aux_loss",
         num_tokens=num_tokens,
@@ -1079,7 +1160,8 @@ def _benchmark_aux_loss_one(
         fused_ms=fused_ms,
         ref_ms=ref_ms,
         speedup=ref_ms / fused_ms if fused_ms > 0 else float("inf"),
-        tokens_per_sec=num_tokens / (fused_ms / 1000),
+        fused_gbps=nbytes / (fused_ms * 1e-3) / 1e9 if fused_ms > 0 else 0.0,
+        ref_gbps=nbytes / (ref_ms * 1e-3) / 1e9 if ref_ms > 0 else 0.0,
     )
 
 
@@ -1149,6 +1231,140 @@ def _time_forward_backward(fn, loss_fn, warmup: int, iters: int) -> float:
     return start.elapsed_time(end) / iters
 
 
+def _time_kernel_only(fn, warmup: int, iters: int) -> float:
+    """Time a raw kernel call (no autograd, no loss).  Returns average ms."""
+    for _ in range(warmup):
+        fn()
+    torch.cuda.synchronize()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    for _ in range(iters):
+        fn()
+    end.record()
+    torch.cuda.synchronize()
+    return start.elapsed_time(end) / iters
+
+
+# ---------------------------------------------------------------------------
+# Raw backward helpers — call the CUDA kernel directly, no autograd
+# ---------------------------------------------------------------------------
+
+def _topk_backward_raw_fused(
+    routing_map: torch.Tensor,
+    intermediate_output: torch.Tensor,
+    grad_probs: torch.Tensor,
+    grad_logits: torch.Tensor,
+    topk: int,
+    use_pre_softmax: bool,
+    scaling_factor: float,
+    score_function: str,
+) -> None:
+    """Call the fused backward kernel directly (no autograd overhead)."""
+    import transformer_engine_torch as tex
+
+    tex.fused_topk_with_score_function_bwd(
+        grad_probs.size(0),   # num_tokens
+        grad_probs.size(1),   # num_experts
+        routing_map,
+        intermediate_output,
+        grad_probs,
+        grad_logits,
+        topk,
+        use_pre_softmax,
+        scaling_factor,
+        score_function,
+    )
+
+
+def _topk_backward_raw_reference(
+    routing_map: torch.Tensor,
+    intermediate_output: torch.Tensor,
+    grad_probs: torch.Tensor,
+    grad_logits: torch.Tensor,
+    topk: int,
+    use_pre_softmax: bool,
+    scaling_factor: float,
+    score_function: str,
+) -> None:
+    """Pure-PyTorch backward matching the fused kernel, operating on the same
+    pre-computed intermediate buffers.  No autograd — direct tensor math."""
+    g = grad_probs.float() * scaling_factor
+    act = intermediate_output  # already float
+    mask = routing_map  # bool [T, E]
+
+    if score_function == "sigmoid":
+        if topk > 1:
+            # Normalization backward
+            sum_act = (act * mask).sum(dim=-1, keepdim=True)
+            sum_grad_act = (g * act * mask).sum(dim=-1, keepdim=True)
+            denom = sum_act + 1e-20
+            g = torch.where(mask, g / denom - sum_grad_act / (denom * denom), torch.zeros_like(g))
+        else:
+            g = torch.where(mask, g, torch.zeros_like(g))
+        # Sigmoid backward: act = sigmoid(x), dy/dx = act * (1 - act)
+        g = g * act * (1.0 - act)
+    elif score_function == "softmax":
+        if not use_pre_softmax:
+            # Post-softmax backward (routed subset)
+            dot = (g * act * mask).sum(dim=-1, keepdim=True)
+            g = torch.where(mask, act * (g - dot), torch.zeros_like(g))
+        # Zero non-routed
+        g = g * mask.float()
+        if use_pre_softmax:
+            # Pre-softmax backward (all experts)
+            dot = (g * act).sum(dim=-1, keepdim=True)
+            g = act * (g - dot)
+    elif score_function == "sqrtsoftplus":
+        y = torch.sqrt(torch.nn.functional.softplus(act, beta=1.0, threshold=20.0))
+        if topk > 1:
+            sum_act = (y * mask).sum(dim=-1, keepdim=True)
+            sum_grad_act = (g * y * mask).sum(dim=-1, keepdim=True)
+            denom = sum_act + 1e-20
+            g = torch.where(mask, g / denom - sum_grad_act / (denom * denom), torch.zeros_like(g))
+        else:
+            g = torch.where(mask, g, torch.zeros_like(g))
+        # Sqrtsoftplus backward: dy/dx = sigmoid(x) / (2 * y)
+        g = g * torch.sigmoid(act) / (2.0 * y + 1e-20)
+
+    grad_logits.copy_(g.to(grad_logits.dtype))
+
+
+def _aux_loss_backward_raw_reference(
+    intermediate_output: torch.Tensor,
+    grad_scores: torch.Tensor,
+    grad_logits: torch.Tensor,
+    score_function: str,
+) -> None:
+    """Pure-PyTorch backward for aux_loss scores, no autograd.
+    No routing_map — all experts participate in normalization."""
+    g = grad_scores.float()
+    act = intermediate_output  # already float
+
+    if score_function == "sigmoid":
+        # act = sigmoid output; normalization: scores = act / sum(act)
+        sum_act = act.sum(dim=-1, keepdim=True)
+        sum_grad_act = (g * act).sum(dim=-1, keepdim=True)
+        denom = sum_act + 1e-20
+        g = g / denom - sum_grad_act / (denom * denom)
+        g = g * act * (1.0 - act)
+    elif score_function == "softmax":
+        # act = softmax output
+        dot = (g * act).sum(dim=-1, keepdim=True)
+        g = act * (g - dot)
+    elif score_function == "sqrtsoftplus":
+        # act = original logit
+        y = torch.sqrt(torch.nn.functional.softplus(act, beta=1.0, threshold=20.0))
+        sum_act = y.sum(dim=-1, keepdim=True)
+        sum_grad_act = (g * y).sum(dim=-1, keepdim=True)
+        denom = sum_act + 1e-20
+        g = g / denom - sum_grad_act / (denom * denom)
+        g = g * torch.sigmoid(act) / (2.0 * y + 1e-20)
+
+    grad_logits.copy_(g.to(grad_logits.dtype))
+
+
 # ---------------------------------------------------------------------------
 # Benchmark printing & CSV
 # ---------------------------------------------------------------------------
@@ -1156,16 +1372,58 @@ def _time_forward_backward(fn, loss_fn, warmup: int, iters: int) -> float:
 _BENCH_COLUMNS = [
     "kernel", "num_tokens", "num_experts", "topk", "score_function",
     "group_topk", "dtype", "test_pass",
-    "fused_ms", "ref_ms", "speedup", "tokens_per_sec",
+    "fused_ms", "ref_ms", "speedup", "fused_gbps", "ref_gbps",
 ]
+
+
+def _compute_min_bytes(
+    num_tokens: int, num_experts: int, topk: int,
+    dtype: torch.dtype, kernel: str, test_pass: str,
+) -> int:
+    """Minimum global memory traffic for one kernel call (bytes).
+
+    Forward (topk):
+      Read: logits (dtype)
+      Write: probs (dtype) + routing_map (bool) + intermediate_output (float)
+    Forward (aux_loss):
+      Read: logits (dtype)
+      Write: scores (float) + routing_map (bool) + intermediate_output (float)
+    Backward (topk):
+      Read: grad_probs (dtype) + intermediate_output (float) + routing_map (bool)
+      Write: grad_logits (dtype)
+    Backward (aux_loss):
+      Read: grad_scores (float) + intermediate_output (float)
+      Write: grad_logits (dtype)
+    """
+    elt = torch.finfo(dtype).bits // 8 if dtype.is_floating_point else 4
+    T_E = num_tokens * num_experts
+
+    if test_pass in ("backward", "backward_raw"):
+        read_bytes = T_E * (elt + 4)  # grad + intermediate_output
+        if kernel == "topk":
+            read_bytes += T_E * 1     # routing_map
+        write_bytes = T_E * elt       # grad_logits
+    elif test_pass == "forward":
+        read_bytes = T_E * elt        # logits
+        write_bytes = T_E * (elt + 1 + 4)  # probs/scores + routing_map + intermediate
+    else:  # both
+        # forward + backward combined
+        fwd_read = T_E * elt
+        fwd_write = T_E * (elt + 1 + 4)
+        bwd_read = T_E * (elt + 4) + (T_E if kernel == "topk" else 0)
+        bwd_write = T_E * elt
+        return fwd_read + fwd_write + bwd_read + bwd_write
+
+    return read_bytes + write_bytes
 
 
 def _print_bench_header() -> None:
     """Print the benchmark table header."""
     hdr = (
         f"{'kernel':>8s} {'tokens':>8s} {'experts':>7s} {'topk':>4s} {'score_fn':>12s} "
-        f"{'grp_tk':>6s} {'dtype':>8s} {'pass':>7s} "
-        f"{'fused_ms':>9s} {'ref_ms':>9s} {'speedup':>7s} {'tok/s':>12s}"
+        f"{'grp_tk':>6s} {'dtype':>8s} {'pass':>12s} "
+        f"{'fused_ms':>9s} {'ref_ms':>9s} {'speedup':>7s} "
+        f"{'fused_GB/s':>10s} {'ref_GB/s':>10s}"
     )
     print(hdr)
     print("-" * len(hdr))
@@ -1177,10 +1435,10 @@ def _print_bench_row(r: Dict) -> None:
     print(
         f"{r['kernel']:>8s} {r['num_tokens']:>8d} {r['num_experts']:>7d} {r['topk']:>4d} "
         f"{r['score_function']:>12s} "
-        f"{r['group_topk']:>6d} {r['dtype']:>8s} {r['test_pass']:>7s} "
+        f"{r['group_topk']:>6d} {r['dtype']:>8s} {r['test_pass']:>12s} "
         f"{r['fused_ms']:>9.4f} {r['ref_ms']:>9.4f} "
         f"{r['speedup']:>7.2f}x "
-        f"{r['tokens_per_sec']:>12.0f}"
+        f"{r['fused_gbps']:>10.1f} {r['ref_gbps']:>10.1f}"
     )
     sys.stdout.flush()
 
@@ -1367,9 +1625,9 @@ def main():
     )
     # Note: --pass is a reserved word in Python, so we use dest="test_pass"
     parser.add_argument(
-        "--pass", choices=["forward", "backward", "both"],
+        "--pass", choices=["forward", "backward", "backward_raw", "both"],
         default="both", dest="test_pass",
-        help="Which pass to test: forward, backward, or both (default: both)",
+        help="Which pass to test: forward, backward, backward_raw, or both (default: both)",
     )
 
     # Shape / kernel options.
