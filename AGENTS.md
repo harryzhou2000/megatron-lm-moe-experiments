@@ -23,6 +23,23 @@ TE/                              # TransformerEngine submodule (all source here)
   3rdparty/                      # Submodules: CUTLASS, cuDNN-frontend, googletest
 ```
 
+## Python environment
+
+A virtual environment at the repository root is encouraged for running scripts and tools:
+
+```bash
+# Create and activate the venv (one-time setup)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pandas matplotlib  # for data analysis scripts
+```
+
+Activate before running any Python scripts:
+
+```bash
+source .venv/bin/activate
+```
+
 ## Build commands
 
 ```bash
