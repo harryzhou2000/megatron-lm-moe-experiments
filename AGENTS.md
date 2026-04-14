@@ -161,3 +161,112 @@ PYTORCH_JIT=0 NVTE_TORCH_COMPILE=0 NVTE_ALLOW_NONDETERMINISTIC_ALGO=0 NVTE_FUSED
 - Test files use `pytest`. Common test utilities are in `TE/tests/pytorch/utils.py`.
 - Distributed tests use `torchrun` or `pytest` with MPI and are in `tests/pytorch/distributed/`.
 - The `qa/` directory contains CI-ready scripts; set `TE_PATH` to your TE checkout to run locally.
+
+## Remote compute workflow
+
+Development is done **locally** on the Mac. Code is synced to `computelab` (a SLURM login node) and run on GPU compute nodes inside an enroot container.
+
+### Hosts & access chain
+
+```
+local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  compute node (GPUs)
+                                                            └── enroot container (PyTorch + venv)
+```
+
+### Discovering the active compute node
+
+```bash
+# From local or computelab:
+ssh computelab "squeue -u \$USER -h -o '%N'"
+# Returns e.g.: umb-b300-dp-184
+```
+
+### Current hardware
+
+- **Compute node**: 8× NVIDIA B300 SXM6 AC (275 GB HBM each), NVLink interconnect
+- **CUDA**: 13.1, Driver 590.48.01
+- **Container**: NVIDIA PyTorch 26.02 (PyTorch 2.11.0a0), Python 3.12
+- **Enroot container name**: `test_container_2602`
+- **Container launch script**: `~/scratch/enroot_test1.sh` on computelab
+- **Venv inside container**: `source /workspace/venv/bin/activate`
+- **DeepEP installed at**: `/workspace/venv/lib/python3.12/site-packages/deep_ep/` (editable install from `/home/scratch.hhanyu_gpu/projects/moe/DeepEP`)
+
+### Syncing code to computelab
+
+Work locally, then rsync per-submodule. The rsync exclude file at `~/.rsync-exclude` filters out `.git/`, build artifacts, `__pycache__/`, etc.
+
+```bash
+# Sync DeepEP (trailing slashes are important!)
+rsync ~/projects/moe/DeepEP/ computelab:~/projects/moe/DeepEP/ -auPv \
+    --exclude-from=$(realpath ~/.rsync-exclude)
+
+# Sync TE submodule
+rsync ~/projects/moe/TE/ computelab:~/projects/moe/TE/ -auPv \
+    --exclude-from=$(realpath ~/.rsync-exclude)
+
+# Sync MLM submodule
+rsync ~/projects/moe/MLM/ computelab:~/projects/moe/MLM/ -auPv \
+    --exclude-from=$(realpath ~/.rsync-exclude)
+
+# Sync scripts
+rsync ~/projects/moe/scripts/ computelab:~/projects/moe/scripts/ -auPv \
+    --exclude-from=$(realpath ~/.rsync-exclude)
+```
+
+After rsync, verify the remote matches local: `ssh computelab "cd ~/projects/moe/DeepEP && git diff --stat HEAD"`
+
+### Running commands on the compute node
+
+Use the helper script `scripts/run_on_compute.sh` (also installed at `computelab:~/projects/moe/scripts/`):
+
+```bash
+# From local — single command:
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh '<command>'"
+
+# The script: discovers active SLURM node → SSHs to it → launches enroot container → activates venv → runs command
+```
+
+Or manually (3-hop):
+
+```bash
+# 1. SSH to computelab
+ssh computelab
+
+# 2. Find the node
+squeue -u $USER -h -o "%N"    # e.g. umb-b300-dp-184
+
+# 3. SSH to node and launch container
+ssh umb-b300-dp-184
+bash ~/scratch/enroot_test1.sh
+# Inside container:
+source /workspace/venv/bin/activate
+cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP
+```
+
+### Running DeepEP hybrid-ep tests
+
+```bash
+# Rebuild after code changes (inside container):
+cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP
+rm -rf ~/.deepep/hybrid_ep/jit/   # Clear JIT cache if kernel signatures changed
+pip install -e .
+
+# Run test (from local, one-liner):
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
+     NUM_SMS_DISPATCH=24 NUM_SMS_COMBINE=24 HIDDEN_DIM=512 \
+     NUM_TOKENS_PER_RANK=8192 NUM_LOCAL_EXPERTS=32 TOPK=36 \
+     python tests/test_hybrid_ep.py --num-processes 8'"
+
+# Key env vars for test_hybrid_ep.py:
+#   HIDDEN_DIM          — token hidden dimension (default: 7168)
+#   NUM_LOCAL_EXPERTS   — experts per rank (default: 1)
+#   NUM_TOKENS_PER_RANK — tokens per GPU (default: 4096)
+#   MAX_NUM_OF_TOKENS_PER_RANK — max tokens buffer size (default: NUM_TOKENS_PER_RANK)
+#   TOPK                — top-k routing (default: 8)
+#   NUM_SMS_DISPATCH    — SMs for dispatch kernel (default: 24 single-node, 8 multi-node)
+#   NUM_SMS_COMBINE     — SMs for combine kernel (default: 24 single-node, 8 multi-node)
+#   USE_MNNVL           — 1 to use MNNVL fabric memory (default: auto-detect)
+#   NUM_OF_STAGES_DISPATCH_API        — dispatch SMEM pipeline stages (default: 10)
+#   NUM_OF_IN_FLIGHT_S2G_DISPATCH_API — dispatch S2G in-flight TMA groups (default: 8)
+```
