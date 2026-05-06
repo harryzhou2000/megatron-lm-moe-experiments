@@ -4,12 +4,14 @@
 # Usage (from computelab):
 #   bash ~/projects/moe/scripts/run_on_compute.sh 'your command here'
 #   bash ~/projects/moe/scripts/run_on_compute.sh -n umb-b300-dp-184 'your command here'
+#   bash ~/projects/moe/scripts/run_on_compute.sh -c test_container_2603 'your command here'
 #
 # Usage (from local Mac):
 #   ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh 'your command here'"
 #
 # Options:
-#   -n NODE   Specify the compute node manually (skip squeue discovery)
+#   -n NODE        Specify the compute node manually (skip squeue discovery)
+#   -c CONTAINER   Specify the enroot container name (default: test_container_2603)
 #
 # NOTE: Compilation (pip install, nvcc, etc.) must run on the compute node
 #       inside the container — not on the computelab login node.
@@ -17,15 +19,17 @@
 set -euo pipefail
 
 NODE=""
-while getopts "n:" opt; do
+CONTAINER="test_container_2603"
+while getopts "n:c:" opt; do
     case $opt in
         n) NODE="$OPTARG" ;;
-        *) echo "Usage: $0 [-n NODE] 'command'" >&2; exit 1 ;;
+        c) CONTAINER="$OPTARG" ;;
+        *) echo "Usage: $0 [-n NODE] [-c CONTAINER] 'command'" >&2; exit 1 ;;
     esac
 done
 shift $((OPTIND - 1))
 
-CMD="${1:?Usage: $0 [-n NODE] 'command to run inside container'}"
+CMD="${1:?Usage: $0 [-n NODE] [-c CONTAINER] 'command to run inside container'}"
 
 # Discover the active compute node if not specified
 if [ -z "$NODE" ]; then
@@ -39,6 +43,8 @@ else
     echo "==> Using specified node: $NODE"
 fi
 
+echo "==> Using container: $CONTAINER"
+
 # SSH to the node and run inside the enroot container.
 # Mounts match ~/scratch/enroot_test1.sh:
 #   --mount /home/scratch.hhanyu_gpu:/home/scratch.hhanyu_gpu  (scratch storage)
@@ -51,8 +57,8 @@ fi
 ssh "$NODE" "enroot start -w \
     --mount /home/scratch.hhanyu_gpu:/home/scratch.hhanyu_gpu \
     --mount $HOME:$HOME \
-    test_container_2602 \
-    bash -c 'export PATH=$HOME/.pixi.x86_64/bin:$HOME/.local/bin:/workspace/venv/bin:\$PATH && \
-             export CCACHE_DIR=$HOME/scratch/.ccache && \
-             source /workspace/venv/bin/activate && \
-             $CMD'"
+    $CONTAINER \
+    /bin/bash -c 'export PATH=$HOME/.pixi.x86_64/bin:$HOME/.local/bin:/workspace/venv/bin:\$PATH && \
+                  export CCACHE_DIR=$HOME/scratch/.ccache && \
+                  source /workspace/venv/bin/activate && \
+                  $CMD'"
