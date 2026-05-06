@@ -300,6 +300,53 @@ Additionally eliminates the staging buffer memory (8 MB per rank).
    - Result: 256/256 PASS on B200 NVL8 (H=512, T=8192, E=32, K=36)
 6. **Combine path** (reuse same map for backward) — **NOT YET IMPLEMENTED**
 7. **Kernel 1 optimization** — **NOT YET IMPLEMENTED**
+8. ~~**SMEM pipeline for direct metadata**~~ **DONE** (`0b6ebda`):
+   - Ping-pong TMA prefetch of `direct_write_map` + `topk_routing_map` into SMEM
+   - Eliminates GMEM reads from S2G inner loop
+   - Skip `sparse_to_dense_map` prefetch in direct path (`if constexpr`)
+
+---
+
+## Performance Results (B200 NVL8, H=512, T=8192, E=32)
+
+**Branch:** `hhanyu/direct-permute`, HEAD: `0b6ebda`
+
+### Kineto Kernel Times (after SMEM pipeline optimization)
+
+| Kernel                   | K=8    | K=36   |
+|--------------------------|--------|--------|
+| `dispatch_kernel`        | 350 μs | ~1700 μs (est) |
+| `count_per_source_kernel`| 47 μs  | 199 μs |
+| `compute_metadata_kernel`| 2.5 μs | 2.5 μs |
+| `assign_positions_kernel`| 17 μs  | 35 μs  |
+
+### End-to-End Dispatch Times (Python bench, includes all kernels + memset)
+
+| Config | Direct-permute | Non-direct (dispatch+permute) |
+|--------|---------------|-------------------------------|
+| K=8    | 488 μs        | 211 μs                        |
+| K=36   | 1947 μs       | 312 μs                        |
+
+### NVLink Throughput
+
+| Path        | K=8 kernel | K=36 kernel | Non-direct dispatch kernel |
+|-------------|-----------|-------------|---------------------------|
+| Throughput  | 202 GB/s  | 156 GB/s    | 296 GB/s                  |
+| NVL bytes   | 70.7 MB   | 318 MB      | 45 MB                     |
+
+### Remaining Performance Gap Analysis
+
+Dispatch kernel at K=8 achieves 202 GB/s vs non-direct's 296 GB/s (same ~8 TMAs/token).
+Cause: **scattered write pattern** — direct path writes to random positions across a
+300 MB output buffer (expert-grouped), while staging path writes contiguously.
+This defeats NVLink write coalescing at the hardware level.
+
+### Optimization History
+
+| Optimization                  | K=8 time | K=36 time | Improvement |
+|-------------------------------|----------|-----------|-------------|
+| Baseline (GMEM reads)         | 569 μs   | 2440 μs   | —           |
+| + SMEM pipeline (0b6ebda)     | 488 μs   | 1947 μs   | 9-20%       |
 
 ---
 
