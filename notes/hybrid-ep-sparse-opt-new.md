@@ -712,3 +712,32 @@ Fused dispatch+permute is slightly faster (208 us) but the difference is margina
 worth the additional JIT variant complexity. Fused combine+unpermute is strictly worse (14%).
 The tuning effort for fused kernels is significant (pipeline stages, block counts, inflight
 TMAs) and the results are fragile across hardware/configurations.
+
+### Best Configs (Env Vars)
+
+**Recommended: Non-fused standalone**
+
+```bash
+HIDDEN_DIM=512
+NUM_TOKENS_PER_RANK=8192
+MAX_NUM_OF_TOKENS_PER_RANK=8192
+NUM_LOCAL_EXPERTS=32
+TOPK=36
+NUM_SMS_DISPATCH=32
+NUM_SMS_COMBINE=32
+NUM_OF_STAGES_G2S_COMBINE_API=64
+NUM_OF_STAGES_S2G_COMBINE_API=8
+NUM_TOKENS_COMBINE_REDUCE_BATCH_COMBINE_API=16
+NUM_OF_TOKENS_PER_GROUP_COMBINE_API=2
+```
+
+**Optional: Fused dispatch+permute** (adds 2% speedup with significant tuning complexity)
+
+```bash
+# In addition to the above:
+NUM_BLOCKS_PERMUTE=1024
+NUM_OF_STAGES_DISPATCH_API=20
+NUM_OF_STAGES_PERMUTE_BLOCK_DISPATCH_API=20
+NUM_OF_IN_FLIGHT_S2G_DISPATCH_API=16
+NUM_OF_IN_FLIGHT_S2G_PERMUTE_BLOCK_DISPATCH_API=16
+```
