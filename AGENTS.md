@@ -1,5 +1,11 @@
 # AGENTS.md — Transformer Engine (MoE fork)
 
+## GitHub CLI policy
+
+**All write operations via `gh` (creating PRs, issues, comments, releases, merging, closing, labeling, etc.) are FORBIDDEN unless the user explicitly commands it.** Read-only `gh` operations (viewing PRs, listing issues, fetching check status, etc.) are allowed freely. When in doubt, ask before running any `gh` command that modifies remote state.
+
+---
+
 This repo is a fork of NVIDIA's [TransformerEngine](https://github.com/NVIDIA/TransformerEngine) with MoE (Mixture of Experts) extensions. The main source lives in the `TE/` git submodule. It is a mixed Python + C++/CUDA project built with setuptools + CMake.
 
 ## Repository layout
@@ -180,6 +186,23 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 ssh computelab "squeue -u \$USER -h -o '%N'"
 # Returns e.g.: umb-b300-dp-184
 ```
+
+### Requesting a SLURM allocation
+
+Use `scripts/salloc_select.py` to pick a matching partition/node before running GPU work. From local, pass `--host computelab`; when already on the login node, omit `--host`.
+
+```bash
+# Dry-run: show matching B300 nodes and the selected partition
+python3 scripts/salloc_select.py b300 --gpus 8 --host computelab --dry-run
+
+# Select the best matching partition/node and start an interactive allocation
+python3 scripts/salloc_select.py b300 --gpus 8 --host computelab --time 4:00:00
+
+# Race all matching partitions; the first allocation wins
+python3 scripts/salloc_select.py b300 --gpus 8 --host computelab --all
+```
+
+The helper queries `sinfo`/`squeue`, skips unusable nodes, prefers idle or mixed nodes with enough free GPUs, and otherwise estimates which node should free enough GPUs soonest.
 
 ### Current hardware
 

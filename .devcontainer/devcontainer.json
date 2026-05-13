@@ -7,8 +7,8 @@
     "workspaceFolder": "/workspace/moe",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/moe,type=bind,consistency=cached",
     "runArgs": [
-        "--gpus",
-        "all" // Remove this line if no GPU on host
+        // "--gpus",
+        // "all" // Remove this line if no GPU on host
         // "--memory=16g", // Hard memory limit (match Docker Desktop setting)
         // "--memory-swap=20g", // Memory + swap
         // "--shm-size=1g" // Shared memory (needed by PyTorch DataLoader too)

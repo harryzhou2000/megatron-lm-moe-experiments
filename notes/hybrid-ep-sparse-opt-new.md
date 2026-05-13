@@ -741,3 +741,12 @@ NUM_OF_STAGES_PERMUTE_BLOCK_DISPATCH_API=20
 NUM_OF_IN_FLIGHT_S2G_DISPATCH_API=16
 NUM_OF_IN_FLIGHT_S2G_PERMUTE_BLOCK_DISPATCH_API=16
 ```
+
+**Fused combine+unpermute** (434 us, 14% slower than standalone — not recommended)
+
+```bash
+# In addition to the standalone config above:
+NUM_BLOCKS_UNPERMUTE=1024
+NUM_OF_STAGES_G2S_UNPERMUTE_BLOCK=8
+NUM_OF_STAGES_S2G_UNPERMUTE_BLOCK=8
+```

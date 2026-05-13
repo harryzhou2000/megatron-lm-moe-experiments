@@ -1,0 +1,11 @@
+phase,no_cg_median_us,cg_median_us,delta_us
+pre_dispatch_sync,2914,67,-2847
+dispatch,370,357,-13
+post_dispatch_sync,34,36,2
+permute,788,791,3
+expert_compute,2112,2080,-32
+unpermute,1035,1036,1
+pre_combine_sync,3870,59,-3811
+combine,3510,2687,-823
+post_combine_sync,191,22,-169
+total,14824,7137,-7687
