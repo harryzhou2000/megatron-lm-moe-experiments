@@ -1,7 +1,13 @@
 # Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
-"""Print BW improvements of router variants over a baseline."""
+"""Print BW improvements of router variants over a baseline.
+
+Usage (for p3R progressive results):
+  python data/print_bw_improvements.py --pattern "router_fix_p3R_*.csv"
+  python data/print_bw_improvements.py --pattern "router_fix_p3R_*.csv" --score-function sigmoid
+  python data/print_bw_improvements.py --pattern "router_fix_p3R_*.csv" --seq-len 131072
+"""
 
 import argparse
 from pathlib import Path
@@ -21,10 +27,10 @@ def main():
         help="Directory containing CSV files (default: script directory)",
     )
     parser.add_argument(
-        "--base-name",
+        "--pattern",
         type=str,
-        default="router_fix_p2",
-        help="Base name for baseline and pattern matching (default: router_fix_p2)",
+        default="router_fix_p3R_*.csv",
+        help="Glob pattern for CSV files (default: router_fix_p3R_*.csv)",
     )
     parser.add_argument(
         "--seq-len",
@@ -48,53 +54,53 @@ def main():
     args = parser.parse_args()
 
     data_dir = args.data_dir or Path(__file__).parent
-    base_name = args.base_name
     seq_len = args.seq_len
     score_function = args.score_function
     configs = [tuple(map(int, c.split("/"))) for c in args.configs]
 
-    # Load all base_name* files
-    files = sorted(data_dir.glob(f"{base_name}*.csv"))
+    # Load all matching CSV files, sorted by name (which encodes order via _N_ prefix)
+    files = sorted(data_dir.glob(args.pattern))
     if not files:
-        print(f"No {base_name}*.csv files found in {data_dir}")
+        print(f"No files matching '{args.pattern}' found in {data_dir}")
         return
 
     data = {f.stem: pd.read_csv(f) for f in files}
+    ordered_names = list(data.keys())
 
-    # Check baseline exists
-    if base_name not in data:
-        print(f"Baseline {base_name}.csv not found")
+    if len(ordered_names) < 2:
+        print("Need at least 2 CSV files (baseline + variant)")
         return
 
+    # First file is baseline
+    base_name = ordered_names[0]
     baseline = data[base_name]
-    kernels = ["topk", "aux_loss"]
-    test_passes = ["forward", "backward_raw"]
+    other_names = ordered_names[1:]
 
-    # Get column names (other variants), ordered by suffix chain length
-    other_names = [n for n in sorted(data.keys(), key=len) if n != base_name]
-
-    # Create incremental display names
-    # e.g., "router_fix_p2+fuseloop+asyncload" -> "+asyncload" (relative to previous)
+    # Create display names from the filename suffix after the commit hash
+    # e.g. "router_fix_p3R_1_6d6005a7_fuseloop" -> "+fuseloop"
     display_names = []
-    prev_name = base_name
     for name in other_names:
-        if name.startswith(prev_name + "+"):
-            # Extract the incremental part
-            incremental = name[len(prev_name):]
-            display_names.append(incremental)
-        else:
-            # Fall back to full name if not incremental
-            display_names.append(name.replace(base_name, "") or name)
-        prev_name = name
+        parts = name.split("_")
+        # Last part is the human-readable tag
+        tag = parts[-1] if len(parts) > 4 else name
+        display_names.append(f"+{tag}")
+
+    # Also get a short baseline display name
+    base_parts = base_name.split("_")
+    base_display = base_parts[-1] if len(base_parts) > 4 else base_name
 
     # Print header
-    header = f"| kernel | pass | config | {base_name} | " + " | ".join(display_names) + " |"
-    sep_parts = ["--------|------|--------|---------------"] + ["----------"] * len(other_names)
+    header = f"| kernel | pass | config | {base_display} | " + " | ".join(display_names) + " |"
+    sep_parts = ["--------|------|--------|----------"] + ["----------"] * len(other_names)
     sep = "|" + "|".join(sep_parts) + "|"
 
-    print(f"## BW Improvements over {base_name} (seq_len={seq_len}, score_function={score_function})\n")
+    print(f"## BW Improvements over {base_display} "
+          f"(seq_len={seq_len}, score_function={score_function})\n")
     print(header)
     print(sep)
+
+    kernels = ["topk", "aux_loss"]
+    test_passes = ["forward", "backward_raw"]
 
     for kernel in kernels:
         for test_pass in test_passes:

@@ -5,9 +5,13 @@
 
 Generates 4 plots (2 kernels x forward/backward) comparing fused router
 implementations against unfused reference. Automatically discovers all
-router_fix_p*.csv files in the data directory.
+matching CSV files in the data directory.
 
 Each plot is faceted by score function and sequence length.
+
+Usage (for p3R progressive results):
+  python data/plot_router_benchmark.py --pattern "router_fix_p3R_*.csv"
+  python data/plot_router_benchmark.py --pattern "router_fix_p3R_*.csv" --score-functions sigmoid sqrtsoftplus
 """
 
 import argparse
@@ -32,7 +36,7 @@ COLORS = [
 MARKERS = ["s", "o", "^", "D", "v", "<", ">", "p", "h", "*"]
 
 
-def discover_csv_files(data_dir: Path, pattern: str = "router_fix_p*.csv") -> list[Path]:
+def discover_csv_files(data_dir: Path, pattern: str = "router_fix_p3R_*.csv") -> list[Path]:
     """Discover CSV files matching the pattern.
 
     Args:
@@ -64,62 +68,19 @@ def load_data(csv_files: list[Path]) -> dict[str, pd.DataFrame]:
     return data
 
 
-def order_series_names(names: list[str], base_name: str) -> list[str]:
-    """Order series names: non-suffixed first, then +suffix names ordered by suffix chain.
+def get_display_name(stem: str) -> str:
+    """Extract display name from filename stem.
 
-    Args:
-        names: List of series names.
-        base_name: Base name for detecting + suffixes.
-
-    Returns:
-        Ordered list of names.
+    e.g. "router_fix_p3R_1_6d6005a7_fuseloop" -> "+fuseloop"
+         "router_fix_p3R_0_583d2d12_baseline" -> "baseline"
     """
-    # Separate into base+suffix names and others
-    suffix_names = []
-    other_names = []
-    for name in names:
-        if name.startswith(base_name + "+"):
-            suffix_names.append(name)
-        else:
-            other_names.append(name)
-
-    # Sort suffix names by length (shorter = fewer suffixes = earlier)
-    suffix_names.sort(key=len)
-
-    # Others first (sorted), then suffix names
-    return sorted(other_names) + suffix_names
-
-
-def get_display_names(names: list[str], base_name: str) -> dict[str, str]:
-    """Create incremental display names for series.
-
-    Args:
-        names: List of series names (already ordered).
-        base_name: Base name for detecting + suffixes.
-
-    Returns:
-        Dictionary mapping original name to display name.
-    """
-    display_map = {}
-    prev_name = base_name
-
-    for name in names:
-        if name == base_name:
-            display_map[name] = base_name
-        elif name.startswith(prev_name + "+"):
-            # Extract the incremental part
-            incremental = name[len(prev_name):]
-            display_map[name] = incremental
-            prev_name = name
-        elif name.startswith(base_name + "+"):
-            # Not directly chained, show relative to base
-            display_map[name] = name[len(base_name):]
-            prev_name = name
-        else:
-            # Not a suffix name, keep as is
-            display_map[name] = name
-
-    return display_map
+    parts = stem.split("_")
+    tag = parts[-1] if len(parts) > 4 else stem
+    # First file (index 0) is the baseline
+    idx = parts[3] if len(parts) > 4 else "?"
+    if idx == "0":
+        return tag
+    return f"+{tag}"
 
 
 def prepare_data(
@@ -138,8 +99,8 @@ def prepare_data(
     filtered_data = {}
 
     for name, df in data.items():
-        # Filter out 8-expert case
-        filtered = df[df["num_experts"] != 8].copy()
+        # Filter out 8-expert case and group_topk != 0 (avoid duplicate x-positions)
+        filtered = df[(df["num_experts"] != 8) & (df["group_topk"] == 0)].copy()
         # Create x-axis label combining num_experts and topk
         filtered["x_label"] = (
             filtered["num_experts"].astype(str) + "/" + filtered["topk"].astype(str)
@@ -165,9 +126,6 @@ def prepare_data(
 def get_style_cycler(n_series: int) -> list[tuple[str, str]]:
     """Generate color and marker combinations for n series.
 
-    Each series gets a unique color and marker combination, cycling through
-    both lists in parallel (not as a cartesian product).
-
     Args:
         n_series: Number of data series to style.
 
@@ -188,7 +146,6 @@ def create_plot(
     filtered_data: dict[str, pd.DataFrame],
     unfused_ref: pd.DataFrame,
     output_dir: Path,
-    base_name: str = "router_fix_p2",
     score_functions_filter: list[str] | None = None,
 ) -> None:
     """Create a single faceted plot for a kernel/test_pass combination.
@@ -199,7 +156,6 @@ def create_plot(
         filtered_data: Dictionary mapping name to filtered DataFrame.
         unfused_ref: DataFrame with averaged ref_gbps.
         output_dir: Directory to save plots.
-        base_name: Base name for shortening legend labels.
         score_functions_filter: List of score functions to include (None = all).
     """
     # Filter data for this kernel and test_pass
@@ -217,11 +173,11 @@ def create_plot(
         print(f"No data for kernel={kernel}, test_pass={test_pass}")
         return
 
-    # Order series names: others first, then +suffix names
-    ordered_names = order_series_names(list(series_data.keys()), base_name)
+    # Order by filename (already sorted by _N_ index)
+    ordered_names = sorted(series_data.keys())
 
-    # Get display names (incremental)
-    display_names = get_display_names(ordered_names, base_name)
+    # Get display names from filename stems
+    display_names = {name: get_display_name(name) for name in ordered_names}
     display_names["unfused_ref"] = "unfused_ref"
 
     # Get unique score functions and sequence lengths from first available dataset
@@ -247,12 +203,15 @@ def create_plot(
 
     # Define x-tick order (num_experts/topk combinations)
     x_tick_order = [
+        "256/4",
         "256/8",
         "256/22",
         "256/36",
+        "512/4",
         "512/8",
         "512/22",
         "512/36",
+        "2304/4",
         "2304/8",
         "2304/22",
         "2304/36",
@@ -368,20 +327,14 @@ def main():
     parser.add_argument(
         "--pattern",
         type=str,
-        default="router_fix_*.csv",
-        help="Glob pattern for CSV files (default: router_fix_*.csv)",
+        default="router_fix_p3R_*.csv",
+        help="Glob pattern for CSV files (default: router_fix_p3R_*.csv)",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
         help="Directory to save plots (default: same as data-dir)",
-    )
-    parser.add_argument(
-        "--base-name",
-        type=str,
-        default="router_fix_p2",
-        help="Base name for shortening legend labels (default: router_fix_p2)",
     )
     parser.add_argument(
         "--score-functions",
@@ -412,7 +365,7 @@ def main():
         for test_pass in test_passes:
             create_plot(
                 kernel, test_pass, filtered_data, unfused_ref, output_dir,
-                args.base_name, args.score_functions
+                args.score_functions
             )
 
     print("Done!")

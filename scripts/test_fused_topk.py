@@ -46,6 +46,9 @@ Usage
 
   # Export benchmark results to CSV
   python scripts/test_fused_topk.py --mode benchmark --csv results.csv
+
+  # Canonical progressive performance analysis (used for commit-by-commit comparison):
+  python scripts/test_fused_topk.py --mode benchmark --pass forward backward_raw --csv data/p3R_<tag>.csv
 """
 
 import argparse
@@ -122,7 +125,7 @@ SWEEP_CORRECTNESS = dict(
 SWEEP_BENCHMARK = dict(
     tokens=[128, 8192, 32768, 131072],
     experts=[8, 256, 512, 2304],
-    topk=[8, 22, 36],
+    topk=[4, 8, 22, 36],
     score_functions=ALL_SCORE_FUNCTIONS,
     group_topk=[0, 4],
 )
