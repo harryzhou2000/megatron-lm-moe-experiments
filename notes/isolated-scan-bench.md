@@ -60,12 +60,99 @@ These results were compiled with `HYBRID_EP_BUILD_PERMUTE_FUSION_ENABLE=1`.
 | before | `scan<512,64,256,12288,64,72,1,8,6>` | 650.1 us |
 | after | `scan<512,64,256,12288,64,72,1,8,6>` | 541.7 us |
 
+## Optimization Summary
+
+### 1. Dense local-expert bitset
+
+Commit: `4da2408 [HybridEP] Optimize dense scan local expert lookup`
+
+This was the first dense scan optimization. Dense `TOPK` routing previously reconstructed local
+expert membership with nested local-expert/top-k checks. The patch builds a per-token local-expert
+register bitset while reading `TOPK` and uses O(1) bit tests later in scan.
+
+Key `HYBRID_EP_BUILD_PERMUTE_FUSION_ENABLE=1` results:
+
+| Case | Template | Before | After | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 2044.7 us | 686.4 us | 2.98x |
+| E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 1384.7 us | 583.1 us | 2.37x |
+| E=8, topk=6 | `scan<512,108,256,12288,64,72,1,8,6>` | 412.4 us | 350.8 us | 1.18x |
+
+Key `HYBRID_EP_BUILD_PERMUTE_FUSION_ENABLE=0` results after moving the bitset into the common dense
+scan path:
+
+| Case | Template | Before | After | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 702.3 us | 625.4 us | 1.12x |
+| E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 600.9 us | 525.6 us | 1.14x |
+
+### 2. Dense rank bitset
+
+Commit: `845825b [HybridEP] Use rank bitsets in dense scan`
+
+This was the second dense scan optimization. Dense mode now uses compact `uint32_t rank_mask[]`
+instead of per-thread `bool token_needed_by_rank[NUM_OF_RANKS_PER_NODE]` arrays. Sparse routing is
+unchanged. The first attempted variant also skipped absent ranks at warp level, but it regressed
+(`256/108, E=32, topk=36` became 883.2 us), so the committed version keeps the original all-rank
+scan loop structure and only replaces the storage/check representation.
+
+Results vs `4da2408` on `umb-b300-026`:
+
+| Macro | Case | Template | Before | After | Speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| permute-fusion=1 | E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 686.4 us | 650.8 us | 1.05x |
+| permute-fusion=1 | E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 583.1 us | 466.4 us | 1.25x |
+| permute-fusion=0 | E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 625.4 us | 427.9 us | 1.46x |
+| permute-fusion=0 | E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 525.6 us | 331.7 us | 1.58x |
+
+E=4/topk=8 results vs `4da2408` on `umb-b300-026`:
+
+| Macro | Case | Template | Before | After | Speedup |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| permute-fusion=1 | E=4, topk=8 | `scan<256,108,256,12288,64,72,1,4,8>` | 472.6 us | 307.2 us | 1.54x |
+| permute-fusion=1 | E=4, topk=8 | `scan<512,108,256,12288,64,72,1,4,8>` | 394.2 us | 247.4 us | 1.59x |
+| permute-fusion=0 | E=4, topk=8 | `scan<256,108,256,12288,64,72,1,4,8>` | 361.6 us | 238.0 us | 1.52x |
+| permute-fusion=0 | E=4, topk=8 | `scan<512,108,256,12288,64,72,1,4,8>` | 317.9 us | 212.6 us | 1.50x |
+
+Full `tests/test_hybrid_ep.py --num-processes 8` passed BF16 and FP8 correctness with this patch.
+
+### 3. Dense local-expert warp pruning candidate
+
+Status: rejected, no commit.
+
+This was the third attempted optimization. The idea was to avoid scanning all local experts in Step 2
+when dense mode only touches a few local experts in a warp tile. The first implementation built a
+warp-union local-expert mask and scanned only set bits while preserving the dense `dense_to_expert_map`
+row format. It regressed, likely because `__reduce_or`, `while/__ffs` control flow, and full-row
+initialization cost more than the skipped local-expert ballots.
+
+Full warp-union results vs `845825b` on `umb-b300-dp-184`:
+
+| Case | Template | Before | After | Result |
+| --- | ---: | ---: | ---: | ---: |
+| E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 645.9 us | 734.4 us | slower |
+| E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 476.2 us | 582.6 us | slower |
+| E=4, topk=8 | `scan<256,108,256,12288,64,72,1,4,8>` | 293.5 us | 321.7 us | slower |
+| E=4, topk=8 | `scan<512,108,256,12288,64,72,1,4,8>` | 239.6 us | 260.3 us | slower |
+
+A cheaper sub-variant guarded the local-expert loop with `if (vote_result != 0)`, skipping the local
+expert scan only when no lane in the warp tile routes to the local rank. That was mixed and still not
+robust enough to keep:
+
+| Case | Template | Before | After | Result |
+| --- | ---: | ---: | ---: | ---: |
+| E=32, topk=36 | `scan<256,108,256,12288,64,72,1,32,36>` | 646.0 us | 593.4 us | faster |
+| E=32, topk=36 | `scan<512,108,256,12288,64,72,1,32,36>` | 478.3 us | 514.5 us | slower |
+| E=4, topk=8 | `scan<256,108,256,12288,64,72,1,4,8>` | 293.2 us | 322.8 us | slower |
+| E=4, topk=8 | `scan<512,108,256,12288,64,72,1,4,8>` | 239.8 us | 238.9 us | neutral |
+
 ## Notes
 
-- The implemented optimization is a local-expert register bitset in dense fused scan.
+- The first implemented optimization is a local-expert register bitset in dense fused scan.
 - The local-expert register bitset was moved into the common dense scan path, so it now applies
   to `HYBRID_EP_BUILD_PERMUTE_FUSION_ENABLE=0` as well as `=1`.
-- No rank-bitset optimization has been implemented yet.
+- The second implemented optimization is a dense rank bitset, committed in `845825b`.
+- Dense local-expert warp pruning was tested and rejected because it was not consistently faster.
 - Naming is confusing: `HYBRID_EP_BUILD_PERMUTE_FUSION_ENABLE` has different effective meanings
   depending on which JIT kernel is being built.
   - For the scan kernel, the macro means scan also produces permute-preprocessing metadata

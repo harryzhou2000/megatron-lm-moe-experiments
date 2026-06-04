@@ -180,6 +180,8 @@ ptr = make_ptr(cutlass.Float16, tensor.data_ptr(), cute.AddressSpace.gmem, assum
 - Passing `torch.Tensor` directly to `@jit` triggers implicit DLPack conversion with dynamic layout.
 - `from_dlpack()` produces static layout; use `mark_layout_dynamic()` for reuse across shapes.
 - For performance-critical paths, bypass DLPack with `make_ptr()` + `cute.make_tensor()`.
+- In CuTe DSL 4.4.2, dynamic `tensor.iterator + offset` may not be accepted by low-level `cute.arch.load()` or atomic wrappers. Prefer tensor indexing for loads, and for atomics use a host-created `cute.Pointer` from `make_ptr()`; if needed pass `(ptr + offset).llvm_ptr` explicitly.
+- In CuTe DSL 4.5.2, low-level APIs that lower to attributes may require Python compile-time literals. For example, use `arch.cp_async_bulk_wait_group(NUM_IN_FLIGHT, read=True)`, not `arch.cp_async_bulk_wait_group(cutlass.Int32(NUM_IN_FLIGHT), read=True)`.
 
 ### 8. JIT Caching
 

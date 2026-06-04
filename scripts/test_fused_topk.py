@@ -44,6 +44,10 @@ Usage
   # Test both kernels (default when --kernel omitted)
   python scripts/test_fused_topk.py --kernel topk aux_loss
 
+  # Test dense top-k index output for the topk kernel
+  python scripts/test_fused_topk.py --kernel topk --pass forward \\
+      --topk-output-mode dense --topk-index-dtype int16 int32 int64
+
   # Export benchmark results to CSV
   python scripts/test_fused_topk.py --mode benchmark --csv results.csv
 
@@ -53,6 +57,7 @@ Usage
 
 import argparse
 import csv
+import inspect
 import itertools
 import sys
 from typing import Dict, List, Optional, Tuple
@@ -119,7 +124,6 @@ SWEEP_CORRECTNESS = dict(
     score_functions=ALL_SCORE_FUNCTIONS,
     input_types=["arange", "random", "extreme", "narrow", "constant"],
     group_topk=[0, 4],
-    max_tests=200,
 )
 
 SWEEP_BENCHMARK = dict(
@@ -295,6 +299,12 @@ DTYPE_MAP = {
     "bfloat16": torch.bfloat16,
 }
 
+INDEX_DTYPE_MAP = {
+    "int16": torch.int16,
+    "int32": torch.int32,
+    "int64": torch.int64,
+}
+
 
 def parse_dtype(s: str) -> torch.dtype:
     s = s.strip().lower()
@@ -303,6 +313,76 @@ def parse_dtype(s: str) -> torch.dtype:
             f"Unknown dtype '{s}'. Choose from: {', '.join(DTYPE_MAP.keys())}"
         )
     return DTYPE_MAP[s]
+
+
+def _parse_index_dtype(s: str) -> torch.dtype:
+    s = s.strip().lower()
+    if s not in INDEX_DTYPE_MAP:
+        raise argparse.ArgumentTypeError(
+            f"Unknown index dtype '{s}'. Choose from: {', '.join(INDEX_DTYPE_MAP.keys())}"
+        )
+    return INDEX_DTYPE_MAP[s]
+
+
+def _dtype_name(dtype: torch.dtype) -> str:
+    return str(dtype).replace("torch.", "")
+
+
+def _fused_topk_supports_dense_output() -> bool:
+    """Return whether installed TE exposes the dense top-k output argument."""
+    try:
+        return "topk_indices" in inspect.signature(fused_topk_with_score_function).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _resolve_topk_output_configs(args) -> List[Tuple[str, Optional[torch.dtype]]]:
+    """Resolve sparse/dense topk output modes requested by the CLI."""
+    if args.topk_output_mode == "sparse":
+        return [("sparse", None)]
+
+    dense_supported = _fused_topk_supports_dense_output()
+    dense_dtypes = args.topk_index_dtype or [
+        INDEX_DTYPE_MAP["int16"],
+        INDEX_DTYPE_MAP["int32"],
+        INDEX_DTYPE_MAP["int64"],
+    ]
+
+    configs: List[Tuple[str, Optional[torch.dtype]]] = []
+    if args.topk_output_mode == "both":
+        configs.append(("sparse", None))
+    if dense_supported:
+        configs.extend(("dense", dtype) for dtype in dense_dtypes)
+    else:
+        print(
+            "WARN: installed TE fused_topk_with_score_function does not expose topk_indices; "
+            "skipping dense topk output mode."
+        )
+    return configs
+
+
+def _topk_indices_to_routing_map(
+    topk_indices: torch.Tensor,
+    num_experts: int,
+) -> torch.Tensor:
+    """Convert dense [T, K] top-k indices into a bool [T, E] routing map."""
+    num_tokens = topk_indices.size(0)
+    indices = topk_indices.long()
+    if indices.numel() > 0:
+        min_idx = indices.min().item()
+        max_idx = indices.max().item()
+        if min_idx < 0 or max_idx >= num_experts:
+            raise ValueError(
+                f"Dense topk indices out of range: min={min_idx}, max={max_idx}, "
+                f"num_experts={num_experts}"
+            )
+    routing_map = torch.zeros(
+        num_tokens, num_experts, dtype=torch.bool, device=topk_indices.device,
+    )
+    routing_map.scatter_(1, indices, True)
+    if routing_map.sum(dim=1).min().item() != topk_indices.size(1):
+        raise ValueError("Dense topk indices contain duplicates within at least one token row")
+    return routing_map
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +617,8 @@ def run_topk_correctness(
     dtype: torch.dtype,
     input_type: str,
     test_pass: str,
+    topk_output_mode: str = "sparse",
+    topk_index_dtype: Optional[torch.dtype] = None,
     atol: Optional[float] = None,
     rtol: Optional[float] = None,
     _is_nan_retry: bool = False,
@@ -565,9 +647,17 @@ def run_topk_correctness(
     #   3. For backward check: run reference with fused_map forced, so autograd
     #      backward flows through identical expert positions.
 
-    # Fused kernel forward
-    fused_probs, fused_map = fused_topk_with_score_function(
-        logits=logits_clone, topk=topk,
+    topk_indices = None
+    if topk_output_mode == "dense":
+        if topk_index_dtype is None:
+            raise ValueError("topk_index_dtype is required when topk_output_mode='dense'")
+        topk_indices = torch.empty(
+            (num_tokens, topk), dtype=topk_index_dtype, device=logits_clone.device,
+        )
+
+    call_args = dict(
+        logits=logits_clone,
+        topk=topk,
         use_pre_softmax=use_pre_softmax,
         num_groups=num_groups or 0,
         group_topk=group_topk or 0,
@@ -575,6 +665,22 @@ def run_topk_correctness(
         score_function=score_function,
         expert_bias=expert_bias_clone,
     )
+    if topk_indices is not None:
+        call_args["topk_indices"] = topk_indices
+
+    # Fused kernel forward
+    fused_probs, fused_map = fused_topk_with_score_function(**call_args)
+    if topk_output_mode == "dense":
+        if fused_map.data_ptr() != topk_indices.data_ptr():
+            raise AssertionError("Dense topk output did not return the provided topk_indices buffer")
+        if fused_map.dtype != topk_index_dtype:
+            raise AssertionError(
+                f"Dense topk output dtype mismatch: got {fused_map.dtype}, "
+                f"expected {topk_index_dtype}"
+            )
+        fused_routing_map = _topk_indices_to_routing_map(fused_map, num_experts)
+    else:
+        fused_routing_map = fused_map
 
     # --- NaN safeguard: detect NaN in forward outputs ---
     has_nan = fused_probs.isnan().any()
@@ -591,7 +697,8 @@ def run_topk_correctness(
         f"[topk {test_pass:>4s} | {sf_display:>12s} | tokens={num_tokens:>6d} | "
         f"experts={num_experts:>4d} | topk={topk} | "
         f"grp_topk={group_topk} | scale={scaling_factor} | bias={enable_bias} | "
-        f"dtype={dtype} | input={input_type}]"
+        f"dtype={dtype} | input={input_type} | output={topk_output_mode}"
+        f"{':' + _dtype_name(topk_index_dtype) if topk_index_dtype is not None else ''}]"
     )
     try:
         # --- Forward check ---
@@ -605,7 +712,7 @@ def run_topk_correctness(
             if has_nan or ref_probs_fwd.isnan().any():
                 raise _NaNDetected()
             fwd_ok = _check_topk_forward(
-                ref_probs_fwd, ref_map_fwd, fused_probs, fused_map,
+                ref_probs_fwd, ref_map_fwd, fused_probs, fused_routing_map,
                 logits, score_function, use_pre_softmax, expert_bias, dtype, tol_kw, tag,
             )
             if not fwd_ok:
@@ -624,7 +731,7 @@ def run_topk_correctness(
                 logits, topk, use_pre_softmax,
                 num_groups, group_topk, scaling_factor,
                 score_function, expert_bias,
-                forced_routing_map=fused_map.detach(),
+                forced_routing_map=fused_routing_map.detach(),
             )
             ref_loss = ref_probs_bwd.sum()
             ref_loss.backward()
@@ -664,6 +771,7 @@ def run_topk_correctness(
             group_topk=group_topk, scaling_factor=scaling_factor,
             score_function=score_function, enable_bias=enable_bias,
             dtype=dtype, input_type=_SAFE_INPUT_TYPE, test_pass=test_pass,
+            topk_output_mode=topk_output_mode, topk_index_dtype=topk_index_dtype,
             atol=atol, rtol=rtol, _is_nan_retry=True,
         )
     except AssertionError as e:
@@ -862,33 +970,45 @@ def run_aux_loss_correctness(
 def topk_correctness_suite(args) -> bool:
     """Run topk correctness tests.  Returns True if all pass."""
     configs = _build_topk_configs(args, SWEEP_CORRECTNESS)
-    max_tests = SWEEP_CORRECTNESS.get("max_tests", len(configs))
+    output_configs = _resolve_topk_output_configs(args)
+    if not output_configs:
+        print("\nTopk correctness: no supported output modes requested\n")
+        return True
+    max_tests = args.max_tests
     # Deduplicate passes for correctness: backward_raw uses the same check as
     # backward, and "both" covers forward+backward, so map accordingly.
     corr_passes = _correctness_passes(args.test_pass)
 
-    total = len(configs) * len(corr_passes)
-    if total > max_tests:
+    total = len(configs) * len(corr_passes) * len(output_configs)
+    if max_tests is not None and total > max_tests:
         step = max(1, total // max_tests)
     else:
         step = 1
 
     print(f"\nRunning topk correctness tests "
-          f"({len(configs)} configs x {len(corr_passes)} pass(es), "
-          f"dtype={args.dtype}, pass={corr_passes})...\n")
+          f"({len(configs)} configs x {len(corr_passes)} pass(es) x "
+          f"{len(output_configs)} output mode(s), dtype={args.dtype}, "
+          f"pass={corr_passes})...\n")
 
     passed = 0
     count = 0
     for i, cfg in enumerate(configs):
         for tp in corr_passes:
-            if (i * len(corr_passes) + corr_passes.index(tp)) % step != 0:
-                continue
-            count += 1
-            ok = run_topk_correctness(
-                dtype=args.dtype, test_pass=tp,
-                atol=args.atol, rtol=args.rtol, **cfg,
-            )
-            passed += int(ok)
+            for output_idx, (output_mode, index_dtype) in enumerate(output_configs):
+                flat_idx = (
+                    i * len(corr_passes) * len(output_configs)
+                    + corr_passes.index(tp) * len(output_configs)
+                    + output_idx
+                )
+                if flat_idx % step != 0:
+                    continue
+                count += 1
+                ok = run_topk_correctness(
+                    dtype=args.dtype, test_pass=tp,
+                    topk_output_mode=output_mode, topk_index_dtype=index_dtype,
+                    atol=args.atol, rtol=args.rtol, **cfg,
+                )
+                passed += int(ok)
 
     print(f"\nTopk correctness: {passed}/{count} passed\n")
     return passed == count
@@ -897,11 +1017,11 @@ def topk_correctness_suite(args) -> bool:
 def aux_loss_correctness_suite(args) -> bool:
     """Run aux loss score correctness tests.  Returns True if all pass."""
     configs = _build_aux_loss_configs(args, SWEEP_CORRECTNESS)
-    max_tests = SWEEP_CORRECTNESS.get("max_tests", len(configs))
+    max_tests = args.max_tests
     corr_passes = _correctness_passes(args.test_pass)
 
     total = len(configs) * len(corr_passes)
-    if total > max_tests:
+    if max_tests is not None and total > max_tests:
         step = max(1, total // max_tests)
     else:
         step = 1
@@ -940,6 +1060,8 @@ def _benchmark_topk_one(
     group_topk: int,
     dtype: torch.dtype,
     test_pass: str,
+    topk_output_mode: str,
+    topk_index_dtype: Optional[torch.dtype],
     warmup: int,
     iters: int,
 ) -> Dict:
@@ -962,6 +1084,12 @@ def _benchmark_topk_one(
         score_function=score_function,
         expert_bias=expert_bias,
     )
+    if topk_output_mode == "dense":
+        if topk_index_dtype is None:
+            raise ValueError("topk_index_dtype is required when topk_output_mode='dense'")
+        call_args["topk_indices"] = torch.empty(
+            (num_tokens, topk), dtype=topk_index_dtype, device="cuda",
+        )
 
     if test_pass == "backward_raw":
         # ----- Raw kernel-only backward benchmark -----
@@ -970,15 +1098,27 @@ def _benchmark_topk_one(
         import transformer_engine_torch as tex
 
         logits_fwd = torch.randn(num_tokens, num_experts, dtype=dtype, device="cuda")
-        _, routing_map, intermediate_output = tex.fused_topk_with_score_function_fwd(
-            logits_fwd, topk, use_pre_softmax,
-            8 if group_topk else 0, group_topk, 1.0, score_function, expert_bias,
+        topk_indices = None
+        if topk_output_mode == "dense":
+            if topk_index_dtype is None:
+                raise ValueError("topk_index_dtype is required when topk_output_mode='dense'")
+            topk_indices = torch.empty((num_tokens, topk), dtype=topk_index_dtype, device="cuda")
+        _, routing_output, intermediate_output = tex.fused_topk_with_score_function_fwd(
+            logits_fwd,
+            topk,
+            use_pre_softmax,
+            8 if group_topk else 0,
+            group_topk,
+            1.0,
+            score_function,
+            expert_bias,
+            topk_indices,
         )
         grad_probs = torch.ones(num_tokens, num_experts, dtype=dtype, device="cuda")
         grad_logits = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
 
         bwd_args = dict(
-            routing_map=routing_map,
+            routing_map=routing_output,
             intermediate_output=intermediate_output,
             grad_probs=grad_probs,
             grad_logits=grad_logits,
@@ -986,6 +1126,7 @@ def _benchmark_topk_one(
             use_pre_softmax=use_pre_softmax,
             scaling_factor=1.0,
             score_function=score_function,
+            use_dense_indices=topk_output_mode == "dense",
         )
         fused_ms = _time_kernel_only(
             lambda: _topk_backward_raw_fused(**bwd_args), warmup, iters,
@@ -993,6 +1134,11 @@ def _benchmark_topk_one(
 
         # Reference: equivalent PyTorch math, same inputs, no autograd
         grad_logits_ref = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
+        routing_map = (
+            _topk_indices_to_routing_map(routing_output, num_experts)
+            if topk_output_mode == "dense"
+            else routing_output
+        )
         ref_bwd_args = dict(
             routing_map=routing_map,
             intermediate_output=intermediate_output,
@@ -1054,9 +1200,19 @@ def _benchmark_topk_one(
             )
 
     sf_display = _join_score_function(score_function, use_pre_softmax)
-    nbytes = _compute_min_bytes(num_tokens, num_experts, topk, dtype, "topk", test_pass)
+    nbytes = _compute_min_bytes(
+        num_tokens, num_experts, topk, dtype, "topk", test_pass,
+        topk_output_mode=topk_output_mode, topk_index_dtype=topk_index_dtype,
+        score_function=sf_display,
+    )
+    ref_nbytes = _compute_min_bytes(
+        num_tokens, num_experts, topk, dtype, "topk", test_pass,
+        topk_output_mode="sparse", score_function=sf_display,
+    )
     return dict(
         kernel="topk",
+        output_mode=topk_output_mode,
+        index_dtype=_dtype_name(topk_index_dtype) if topk_index_dtype is not None else "-",
         num_tokens=num_tokens,
         num_experts=num_experts,
         topk=topk,
@@ -1068,7 +1224,7 @@ def _benchmark_topk_one(
         ref_ms=ref_ms,
         speedup=ref_ms / fused_ms if fused_ms > 0 else float("inf"),
         fused_gbps=nbytes / (fused_ms * 1e-3) / 1e9 if fused_ms > 0 else 0.0,
-        ref_gbps=nbytes / (ref_ms * 1e-3) / 1e9 if ref_ms > 0 else 0.0,
+        ref_gbps=ref_nbytes / (ref_ms * 1e-3) / 1e9 if ref_ms > 0 else 0.0,
     )
 
 
@@ -1165,6 +1321,8 @@ def _benchmark_aux_loss_one(
     nbytes = _compute_min_bytes(num_tokens, num_experts, topk, dtype, "aux_loss", test_pass)
     return dict(
         kernel="aux_loss",
+        output_mode="sparse",
+        index_dtype="-",
         num_tokens=num_tokens,
         num_experts=num_experts,
         topk=topk,
@@ -1292,6 +1450,7 @@ def _topk_backward_raw_fused(
     use_pre_softmax: bool,
     scaling_factor: float,
     score_function: str,
+    use_dense_indices: bool = False,
 ) -> None:
     """Call the fused backward kernel directly (no autograd overhead)."""
     import transformer_engine_torch as tex
@@ -1307,6 +1466,7 @@ def _topk_backward_raw_fused(
         use_pre_softmax,
         scaling_factor,
         score_function,
+        use_dense_indices,
     )
 
 
@@ -1402,8 +1562,8 @@ def _aux_loss_backward_raw_reference(
 # ---------------------------------------------------------------------------
 
 _BENCH_COLUMNS = [
-    "kernel", "num_tokens", "num_experts", "topk", "score_function",
-    "group_topk", "dtype", "test_pass",
+    "kernel", "output_mode", "index_dtype", "num_tokens", "num_experts", "topk",
+    "score_function", "group_topk", "dtype", "test_pass",
     "fused_ms", "ref_ms", "speedup", "fused_gbps", "ref_gbps",
 ]
 
@@ -1411,6 +1571,9 @@ _BENCH_COLUMNS = [
 def _compute_min_bytes(
     num_tokens: int, num_experts: int, topk: int,
     dtype: torch.dtype, kernel: str, test_pass: str,
+    topk_output_mode: str = "sparse",
+    topk_index_dtype: Optional[torch.dtype] = None,
+    score_function: Optional[str] = None,
 ) -> int:
     """Minimum global memory traffic for one kernel call (bytes).
 
@@ -1423,28 +1586,57 @@ def _compute_min_bytes(
     Backward (topk):
       Read:  grad_probs (dtype) + intermediate_output (fp32) + routing_map (bool)
       Write: grad_logits (dtype)
+      Optimized dense post-routing backward reads only selected grad/activation entries,
+      but still writes the full grad_logits row to zero non-routed experts.
     Backward (aux_loss):
       Read:  grad_scores (fp32) + intermediate_output (fp32)
       Write: grad_logits (dtype)
     """
     elt = torch.finfo(dtype).bits // 8 if dtype.is_floating_point else 4
+    index_elt = (
+        torch.iinfo(topk_index_dtype).bits // 8
+        if topk_index_dtype is not None
+        else 1
+    )
     T_E = num_tokens * num_experts
+    T_K = num_tokens * topk
     # For aux_loss: grad_scores and scores are always fp32 regardless of dtype.
     grad_elt = elt if kernel == "topk" else 4
     score_elt = elt if kernel == "topk" else 4
 
+    def _topk_backward_bytes() -> int:
+        if topk_output_mode == "dense" and score_function in (
+            "softmax",
+            "sigmoid",
+            "sqrtsoftplus",
+        ):
+            read_bytes = T_K * (index_elt + grad_elt + 4)
+            write_bytes = T_E * elt + T_K * elt
+            return read_bytes + write_bytes
+        if topk_output_mode == "dense" and score_function == "pre-softmax":
+            read_bytes = T_E * 4 + T_K * (index_elt + grad_elt)
+            write_bytes = T_E * elt + T_K * elt
+            return read_bytes + write_bytes
+        read_bytes = T_E * (grad_elt + 4) + T_E
+        write_bytes = T_E * elt
+        return read_bytes + write_bytes
+
     if test_pass in ("backward", "backward_raw"):
-        read_bytes = T_E * (grad_elt + 4)   # grad + intermediate_output (fp32)
         if kernel == "topk":
-            read_bytes += T_E * 1            # routing_map
-        write_bytes = T_E * elt              # grad_logits
+            return _topk_backward_bytes()
+        read_bytes = T_E * (grad_elt + 4)
+        write_bytes = T_E * elt
     elif test_pass == "forward":
         read_bytes = T_E * elt               # logits
-        write_bytes = T_E * (score_elt + 1 + 4)  # probs/scores + routing_map + intermediate
+        route_bytes = T_K * index_elt if topk_output_mode == "dense" else T_E
+        write_bytes = T_E * (score_elt + 4) + route_bytes
     else:  # both
         fwd_read = T_E * elt
-        fwd_write = T_E * (score_elt + 1 + 4)
-        bwd_read = T_E * (grad_elt + 4) + (T_E if kernel == "topk" else 0)
+        route_bytes = T_K * index_elt if topk_output_mode == "dense" else T_E
+        fwd_write = T_E * (score_elt + 4) + route_bytes
+        if kernel == "topk":
+            return fwd_read + fwd_write + _topk_backward_bytes()
+        bwd_read = T_E * (grad_elt + 4)
         bwd_write = T_E * elt
         return fwd_read + fwd_write + bwd_read + bwd_write
 
@@ -1454,8 +1646,9 @@ def _compute_min_bytes(
 def _print_bench_header() -> None:
     """Print the benchmark table header."""
     hdr = (
-        f"{'kernel':>8s} {'tokens':>8s} {'experts':>7s} {'topk':>4s} {'score_fn':>12s} "
-        f"{'grp_tk':>6s} {'dtype':>8s} {'pass':>12s} "
+        f"{'kernel':>8s} {'output':>7s} {'idx':>5s} {'tokens':>8s} "
+        f"{'experts':>7s} {'topk':>4s} {'score_fn':>12s} {'grp_tk':>6s} "
+        f"{'dtype':>8s} {'pass':>12s} "
         f"{'fused_ms':>9s} {'ref_ms':>9s} {'speedup':>7s} "
         f"{'fused_GB/s':>10s} {'ref_GB/s':>10s}"
     )
@@ -1467,7 +1660,8 @@ def _print_bench_header() -> None:
 def _print_bench_row(r: Dict) -> None:
     """Print a single benchmark result row and flush immediately."""
     print(
-        f"{r['kernel']:>8s} {r['num_tokens']:>8d} {r['num_experts']:>7d} {r['topk']:>4d} "
+        f"{r['kernel']:>8s} {r['output_mode']:>7s} {r['index_dtype']:>5s} "
+        f"{r['num_tokens']:>8d} {r['num_experts']:>7d} {r['topk']:>4d} "
         f"{r['score_function']:>12s} "
         f"{r['group_topk']:>6d} {r['dtype']:>8s} {r['test_pass']:>12s} "
         f"{r['fused_ms']:>9.4f} {r['ref_ms']:>9.4f} "
@@ -1493,9 +1687,14 @@ def _write_csv(results: List[Dict], path: str) -> None:
 def topk_benchmark_suite(args) -> List[Dict]:
     """Run topk benchmark across configurations.  Returns list of result dicts."""
     configs = _build_topk_configs(args, SWEEP_BENCHMARK)
+    output_configs = _resolve_topk_output_configs(args)
+    if not output_configs:
+        print("\nTopk benchmark: no supported output modes requested\n")
+        return []
     passes = args.test_pass  # list
 
     print(f"\nBenchmarking {len(configs)} topk config(s) x {len(passes)} pass(es) "
+          f"x {len(output_configs)} output mode(s) "
           f"(warmup={args.warmup}, iters={args.iters}, "
           f"dtype={args.dtype}, pass={passes})...\n")
     _print_bench_header()
@@ -1506,12 +1705,14 @@ def topk_benchmark_suite(args) -> List[Dict]:
         bench_cfg = {k: v for k, v in cfg.items()
                      if k not in ("input_type", "enable_bias", "scaling_factor", "num_groups")}
         for tp in passes:
-            r = _benchmark_topk_one(
-                **bench_cfg, dtype=args.dtype, test_pass=tp,
-                warmup=args.warmup, iters=args.iters,
-            )
-            _print_bench_row(r)
-            results.append(r)
+            for output_mode, index_dtype in output_configs:
+                r = _benchmark_topk_one(
+                    **bench_cfg, dtype=args.dtype, test_pass=tp,
+                    topk_output_mode=output_mode, topk_index_dtype=index_dtype,
+                    warmup=args.warmup, iters=args.iters,
+                )
+                _print_bench_row(r)
+                results.append(r)
 
     print()
     return results
@@ -1587,6 +1788,19 @@ def main():
                         help="Group top-k value (omit to sweep)")
     parser.add_argument("--scaling-factor", type=float, default=1.0)
     parser.add_argument("--enable-bias", action="store_true", default=False)
+    parser.add_argument(
+        "--topk-output-mode",
+        choices=["sparse", "dense", "both"],
+        default="both",
+        help="Topk routing output to request from TE (default: both sparse bool and dense indices)",
+    )
+    parser.add_argument(
+        "--topk-index-dtype",
+        nargs="+",
+        type=_parse_index_dtype,
+        default=None,
+        help="Dense topk index dtype(s): int16 int32 int64 (default: sweep all for dense)",
+    )
 
     # Data / dtype
     parser.add_argument("--dtype", type=parse_dtype, default=torch.float32,
@@ -1600,6 +1814,12 @@ def main():
                         help="Absolute tolerance override for assert_close")
     parser.add_argument("--rtol", type=float, default=None,
                         help="Relative tolerance override for assert_close")
+    parser.add_argument(
+        "--max-tests",
+        type=int,
+        default=None,
+        help="Maximum correctness cases to run. Omit for exhaustive correctness sweep.",
+    )
 
     # Benchmark tuning
     parser.add_argument("--warmup", type=int, default=20,

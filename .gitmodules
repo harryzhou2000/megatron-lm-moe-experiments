@@ -7,3 +7,6 @@
 [submodule "DeepEP"]
 	path = DeepEP
 	url = git@github.com:harryzhou2000/DeepEP.git
+[submodule "DeepGEMM"]
+	path = DeepGEMM
+	url = https://github.com/deepseek-ai/DeepGEMM

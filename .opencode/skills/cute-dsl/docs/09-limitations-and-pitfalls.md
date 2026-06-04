@@ -150,6 +150,34 @@ DSL API objects are sensitive to MLIR context. **Do NOT** use `functools.lru_cac
 - DLPack may lack support for some narrow data types.
 - For performance-critical paths, bypass DLPack with `make_ptr()`.
 
+## CuTe DSL 4.4.2 Pointer Operand Pitfalls
+
+CuTe DSL 4.4.2 is stricter about operands passed to low-level NVVM ops. Dynamic pointer arithmetic from tensor iterators can produce proxy objects that are not accepted by `cute.arch.load()` or atomic wrappers, causing errors like:
+
+```text
+ValueError: Operand 0 of operation "nvvm.load.ext" must be a Value (is not a Value)
+ValueError: Operand 0 of operation "nvvm.atomicrmw" must be a Value (is not a Value)
+```
+
+Use these workarounds:
+
+- Prefer tensor indexing (`tensor[idx]`) over `cute.arch.load(tensor.iterator + idx, dtype)` for dynamic offsets.
+- For atomics, pass a real `cute.Pointer` created with `make_ptr()` when the base address is known on the host.
+- If pointer arithmetic still fails through the atomic wrapper, pass `(ptr + offset).llvm_ptr` explicitly.
+
+Example:
+
+```python
+from cutlass.cute.runtime import make_ptr
+
+tmp_p = make_ptr(cutlass.Int64, tmp_tensor.data_ptr(), cute.AddressSpace.gmem, assumed_align=8)
+
+@cute.kernel
+def kernel(tmp_p: cute.Pointer, idx: cutlass.Int32):
+    ptr = tmp_p + idx
+    cute.arch.atomic_exch(ptr.llvm_ptr, cutlass.Int64(1), sem="relaxed", scope="gpu")
+```
+
 ## Debugging Limitations
 
 - **No single-stepping** through JIT-compiled code.
@@ -188,3 +216,19 @@ These are by-design constraints:
 | Layout from Python | Create layout inside `@jit` function using `cute.make_layout` |
 | DLPack overhead | Cache `from_dlpack` results or bypass with `make_ptr` |
 | Large tensor strides | Use `use_32bit_stride=False` (default) |
+| `nvvm.load.ext` / `nvvm.atomicrmw` operand is not a Value | Use tensor indexing, host-created `make_ptr`, or `(ptr + offset).llvm_ptr` |
+
+## CuTe DSL 4.5.x Static Attribute Strictness
+
+Some APIs that lower to NVVM attributes require Python compile-time literals, not DSL numeric values. In 4.5.2, `arch.cp_async_bulk_wait_group(cutlass.Int32(N), read=True)` fails with an `IntegerAttr.get(...)` type error because the argument is an `ArithValue` instead of a Python `int`.
+
+Use a plain Python constexpr integer:
+
+```python
+# WRONG on CuTe DSL 4.5.2
+arch.cp_async_bulk_wait_group(cutlass.Int32(NUM_IN_FLIGHT), read=True)
+
+# Works on 4.4.2 and 4.5.2
+arch.cp_async_bulk_wait_group(NUM_IN_FLIGHT, read=True)
+arch.cp_async_bulk_wait_group(0, read=True)
+```

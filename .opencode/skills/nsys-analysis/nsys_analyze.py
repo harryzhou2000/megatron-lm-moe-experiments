@@ -516,6 +516,7 @@ class MultiRankSummary:
     kernel_by_rank: dict[str, dict[int, KernelStats]]
     nccl_by_rank: dict[str, dict[int, dict]]
     total_kernel_time_by_rank: dict[int, float]
+    window_by_rank: dict[int, tuple[Optional[float], Optional[float]]]
     # Iteration info (from rank 0 or first available)
     iterations: list[Iteration]
 
@@ -526,9 +527,11 @@ def aggregate_ranks(reports: list[RankReport]) -> MultiRankSummary:
     kernel_by_rank: dict[str, dict[int, KernelStats]] = defaultdict(dict)
     nccl_by_rank: dict[str, dict[int, dict]] = defaultdict(dict)
     total_kernel_time_by_rank: dict[int, float] = {}
+    window_by_rank: dict[int, tuple[Optional[float], Optional[float]]] = {}
 
     for rpt in reports:
         total_kernel_time_by_rank[rpt.rank] = rpt.total_kernel_time_ms
+        window_by_rank[rpt.rank] = (rpt.window_start_ms, rpt.window_end_ms)
         for cs in rpt.category_stats:
             category_by_rank[cs.category][rpt.rank] = cs
         for ks in rpt.kernel_stats:
@@ -546,6 +549,7 @@ def aggregate_ranks(reports: list[RankReport]) -> MultiRankSummary:
         kernel_by_rank=dict(kernel_by_rank),
         nccl_by_rank=dict(nccl_by_rank),
         total_kernel_time_by_rank=total_kernel_time_by_rank,
+        window_by_rank=window_by_rank,
         iterations=ref_iters,
     )
 
@@ -774,6 +778,22 @@ def format_multi_rank_report(summary: MultiRankSummary, top_n: int = 20) -> str:
         f"max={max(kernel_times):.1f}ms  "
         f"mean={sum(kernel_times)/len(kernel_times):.1f}ms"
     )
+
+    windows = [
+        w for w in summary.window_by_rank.values() if w[0] is not None and w[1] is not None
+    ]
+    if windows:
+        starts = [w[0] for w in windows]
+        ends = [w[1] for w in windows]
+        if len(set(windows)) == 1:
+            lines.append(f"  Analysis window: {starts[0]:.1f} – {ends[0]:.1f} ms")
+        else:
+            durations = [end - start for start, end in windows]
+            lines.append(
+                "  Analysis window: per-rank iteration windows  "
+                f"start={min(starts):.1f}–{max(starts):.1f}ms  "
+                f"duration={min(durations):.1f}–{max(durations):.1f}ms"
+            )
 
     # Iteration timeline (from reference rank)
     if summary.iterations:
@@ -1014,28 +1034,51 @@ def main():
 
     print(f"Analyzing {len(sqlite_files)} .sqlite file(s)...")
 
-    # First pass: detect iterations from first file
+    # First pass: detect iterations from first file for reporting and single-file
+    # window resolution. Multi-rank --iteration is resolved per rank below because
+    # report timestamps are not globally aligned across ranks.
     first_conn = sqlite3.connect(str(sqlite_files[0]))
     first_conn.row_factory = sqlite3.Row
     ref_iterations = detect_iterations(first_conn)
     first_conn.close()
 
-    # Resolve time window
-    win_start, win_end = resolve_window(
-        args.iteration, args.window, ref_iterations
+    global_win_start = None
+    global_win_end = None
+    use_per_rank_iteration = (
+        args.iteration is not None and args.window is None and len(sqlite_files) > 1
     )
-    if win_start is not None:
-        print(f"  Time window: {win_start:.1f} – {win_end:.1f} ms")
+    if args.window or (args.iteration is not None and not use_per_rank_iteration):
+        global_win_start, global_win_end = resolve_window(
+            args.iteration, args.window, ref_iterations
+        )
+        if global_win_start is not None:
+            print(f"  Time window: {global_win_start:.1f} – {global_win_end:.1f} ms")
+    elif use_per_rank_iteration:
+        print(f"  Time window: iteration {args.iteration} resolved independently per rank")
 
     reports = []
     for i, f in enumerate(sqlite_files):
         rank = extract_rank(f.name)
         print(f"  [{i+1}/{len(sqlite_files)}] rank {rank}...", end="", flush=True)
+        win_start = global_win_start
+        win_end = global_win_end
+        if use_per_rank_iteration:
+            conn = sqlite3.connect(str(f))
+            conn.row_factory = sqlite3.Row
+            rank_iterations = detect_iterations(conn)
+            conn.close()
+            win_start, win_end = resolve_window(args.iteration, None, rank_iterations)
         rpt = analyze_rank(
             f, top_n=args.top, window_start_ms=win_start, window_end_ms=win_end
         )
         reports.append(rpt)
-        print(f" {rpt.total_kernel_time_ms:.1f}ms kernel time")
+        if use_per_rank_iteration:
+            print(
+                f" {rpt.total_kernel_time_ms:.1f}ms kernel time "
+                f"[{win_start:.1f}–{win_end:.1f}ms]"
+            )
+        else:
+            print(f" {rpt.total_kernel_time_ms:.1f}ms kernel time")
 
     reports.sort(key=lambda r: r.rank)
 
@@ -1053,15 +1096,21 @@ def main():
                 for it in ref_iterations
             ],
             "window": (
-                {"start_ms": win_start, "end_ms": win_end}
-                if win_start is not None
+                {"start_ms": global_win_start, "end_ms": global_win_end}
+                if global_win_start is not None
                 else None
             ),
+            "per_rank_iteration": args.iteration if use_per_rank_iteration else None,
             "ranks": [],
         }
         for rpt in reports:
             rank_data = {
                 "rank": rpt.rank,
+                "window": (
+                    {"start_ms": rpt.window_start_ms, "end_ms": rpt.window_end_ms}
+                    if rpt.window_start_ms is not None
+                    else None
+                ),
                 "profile_duration_s": rpt.profile_duration_s,
                 "total_kernel_time_ms": rpt.total_kernel_time_ms,
                 "num_kernels": rpt.num_kernels,
