@@ -60,6 +60,7 @@ import csv
 import inspect
 import itertools
 import sys
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -328,12 +329,99 @@ def _dtype_name(dtype: torch.dtype) -> str:
     return str(dtype).replace("torch.", "")
 
 
-def _fused_topk_supports_dense_output() -> bool:
-    """Return whether installed TE exposes the dense top-k output argument."""
+def _callable_supports_parameter(fn, parameter_name: str) -> bool:
+    """Return whether a Python or pybind function exposes a named parameter."""
     try:
-        return "topk_indices" in inspect.signature(fused_topk_with_score_function).parameters
+        return parameter_name in inspect.signature(fn).parameters
     except (TypeError, ValueError):
+        return parameter_name in (getattr(fn, "__doc__", None) or "")
+
+
+@lru_cache(maxsize=None)
+def _raw_fused_topk_fwd_supports_dense_output() -> bool:
+    """Return whether the raw TE fwd binding accepts a dense top-k index buffer."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_topk_with_score_function_fwd, "topk_indices"
+        )
+    except (ImportError, AttributeError):
         return False
+
+
+@lru_cache(maxsize=None)
+def _raw_fused_topk_bwd_supports_dense_output() -> bool:
+    """Return whether the raw TE bwd binding accepts dense top-k indices."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_topk_with_score_function_bwd, "use_dense_indices"
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=None)
+def _fused_topk_supports_dense_output() -> bool:
+    """Return whether installed TE PyTorch API accepts dense top-k indices."""
+    if not _callable_supports_parameter(fused_topk_with_score_function, "topk_indices"):
+        return False
+    if not torch.cuda.is_available():
+        return False
+
+    logits = torch.randn(1, 2, dtype=torch.float32, device="cuda")
+    topk_indices = torch.empty((1, 1), dtype=torch.int32, device="cuda")
+    try:
+        fused_topk_with_score_function(
+            logits=logits,
+            topk=1,
+            use_pre_softmax=True,
+            num_groups=0,
+            group_topk=0,
+            scaling_factor=1.0,
+            score_function="softmax",
+            expert_bias=None,
+            topk_indices=topk_indices,
+        )
+        torch.cuda.synchronize()
+        return True
+    except TypeError:
+        return False
+
+
+def _raw_fused_topk_fwd(
+    logits: torch.Tensor,
+    topk: int,
+    use_pre_softmax: bool,
+    num_groups: int,
+    group_topk: int,
+    scaling_factor: float,
+    score_function: str,
+    expert_bias: Optional[torch.Tensor],
+    topk_indices: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Call raw fused_topk fwd with a signature compatible with upstream and dense TE."""
+    import transformer_engine_torch as tex
+
+    routing_map_format = 0
+    args = (
+        logits,
+        topk,
+        use_pre_softmax,
+        num_groups,
+        group_topk,
+        scaling_factor,
+        score_function,
+        expert_bias,
+        routing_map_format,
+    )
+    if topk_indices is not None:
+        if not _raw_fused_topk_fwd_supports_dense_output():
+            raise RuntimeError("Installed TE raw fused_topk fwd does not accept topk_indices")
+        args = (*args, topk_indices)
+    return tex.fused_topk_with_score_function_fwd(*args)
 
 
 def _resolve_topk_output_configs(args) -> List[Tuple[str, Optional[torch.dtype]]]:
@@ -355,7 +443,7 @@ def _resolve_topk_output_configs(args) -> List[Tuple[str, Optional[torch.dtype]]
         configs.extend(("dense", dtype) for dtype in dense_dtypes)
     else:
         print(
-            "WARN: installed TE fused_topk_with_score_function does not expose topk_indices; "
+            "WARN: installed TE fused_topk path does not expose topk_indices; "
             "skipping dense topk output mode."
         )
     return configs
@@ -1095,24 +1183,22 @@ def _benchmark_topk_one(
         # ----- Raw kernel-only backward benchmark -----
         # Run forward once to get the saved tensors, then time the backward
         # kernel call directly — no autograd, no loss.sum(), no grad allocation.
-        import transformer_engine_torch as tex
-
         logits_fwd = torch.randn(num_tokens, num_experts, dtype=dtype, device="cuda")
         topk_indices = None
         if topk_output_mode == "dense":
             if topk_index_dtype is None:
                 raise ValueError("topk_index_dtype is required when topk_output_mode='dense'")
             topk_indices = torch.empty((num_tokens, topk), dtype=topk_index_dtype, device="cuda")
-        _, routing_output, intermediate_output = tex.fused_topk_with_score_function_fwd(
-            logits_fwd,
-            topk,
-            use_pre_softmax,
-            8 if group_topk else 0,
-            group_topk,
-            1.0,
-            score_function,
-            expert_bias,
-            topk_indices,
+        _, routing_output, intermediate_output = _raw_fused_topk_fwd(
+            logits=logits_fwd,
+            topk=topk,
+            use_pre_softmax=use_pre_softmax,
+            num_groups=8 if group_topk else 0,
+            group_topk=group_topk,
+            scaling_factor=1.0,
+            score_function=score_function,
+            expert_bias=expert_bias,
+            topk_indices=topk_indices,
         )
         grad_probs = torch.ones(num_tokens, num_experts, dtype=dtype, device="cuda")
         grad_logits = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
@@ -1455,9 +1541,8 @@ def _topk_backward_raw_fused(
     """Call the fused backward kernel directly (no autograd overhead)."""
     import transformer_engine_torch as tex
 
-    tex.fused_topk_with_score_function_bwd(
-        grad_probs.size(0),   # num_tokens
-        grad_probs.size(1),   # num_experts
+    routing_map_format = 0
+    args = (
         routing_map,
         intermediate_output,
         grad_probs,
@@ -1466,8 +1551,16 @@ def _topk_backward_raw_fused(
         use_pre_softmax,
         scaling_factor,
         score_function,
-        use_dense_indices,
     )
+    if use_dense_indices:
+        if not _raw_fused_topk_bwd_supports_dense_output():
+            raise RuntimeError("Installed TE raw fused_topk bwd does not accept dense indices")
+        args = (*args, use_dense_indices, routing_map_format)
+    elif _raw_fused_topk_bwd_supports_dense_output():
+        args = (*args, use_dense_indices, routing_map_format)
+    else:
+        args = (*args, routing_map_format)
+    tex.fused_topk_with_score_function_bwd(*args)
 
 
 def _topk_backward_raw_reference(
