@@ -4,14 +4,14 @@
 # Usage (from computelab):
 #   bash ~/projects/moe/scripts/run_on_compute.sh 'your command here'
 #   bash ~/projects/moe/scripts/run_on_compute.sh -n umb-b300-dp-184 'your command here'
-#   bash ~/projects/moe/scripts/run_on_compute.sh -c test_container_2603 'your command here'
+#   bash ~/projects/moe/scripts/run_on_compute.sh -c test_container_2606 'your command here'
 #
 # Usage (from local Mac):
 #   ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh 'your command here'"
 #
 # Options:
 #   -n NODE        Specify the compute node manually (skip squeue discovery)
-#   -c CONTAINER   Specify the enroot container name (default: test_container_2603)
+#   -c CONTAINER   Specify the enroot container name (default: test_container_2606)
 #
 # NOTE: Compilation (pip install, nvcc, etc.) must run on the compute node
 #       inside the container — not on the computelab login node.
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 NODE=""
-CONTAINER="test_container_2603"
+CONTAINER="test_container_2606"
 while getopts "n:c:" opt; do
     case $opt in
         n) NODE="$OPTARG" ;;
@@ -53,12 +53,14 @@ echo "==> Using container: $CONTAINER"
 # Environment setup inside the container:
 #   1. Add pixi bin to PATH (ccache lives here)
 #   2. Set CCACHE_DIR for build caching
-#   3. Activate the Python venv (adds venv bin to PATH for pip, ninja, python)
-ssh "$NODE" "enroot start -w \
+#   3. Activate the Python venv when the selected container provides it
+ssh -o StrictHostKeyChecking=accept-new "$NODE" "enroot start -w \
     --mount /home/scratch.hhanyu_gpu:/home/scratch.hhanyu_gpu \
     --mount $HOME:$HOME \
     $CONTAINER \
     /bin/bash -c 'export PATH=$HOME/.pixi.x86_64/bin:$HOME/.local/bin:/workspace/venv/bin:\$PATH && \
                   export CCACHE_DIR=$HOME/scratch/.ccache && \
-                  source /workspace/venv/bin/activate && \
+                  if [ -f /workspace/venv/bin/activate ]; then \
+                    source /workspace/venv/bin/activate; \
+                  fi && \
                   $CMD'"

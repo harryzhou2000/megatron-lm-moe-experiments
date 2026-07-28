@@ -33,9 +33,11 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 
 - **Compute node**: 8× NVIDIA B300 SXM6 AC (275 GB HBM each), NVLink interconnect
 - **CUDA**: 13.1, Driver 590.48.01
-- **Container**: NVIDIA PyTorch 26.02 (PyTorch 2.11.0a0), Python 3.12
-- **Enroot container name**: `test_container_2602`
-- **Venv inside container**: `/workspace/venv/bin/activate`
+- **Container**: NVIDIA PyTorch 26.06, Python 3.12
+- **Enroot container name**: `test_container_2606`
+- **Python environment**: `test_container_2606` uses system Python/pip; older
+  containers may provide `/workspace/venv/bin/activate`
+- **Current CuTe baseline**: nvidia-cutlass-dsl 4.4.2 with cuDNN Frontend 1.26.0
 
 ### Key Paths
 
@@ -97,7 +99,7 @@ The helper script automatically:
 1. Discovers the active SLURM node via `squeue`
 2. SSHs to it
 3. Launches the enroot container with mounts
-4. Activates the venv
+4. Activates `/workspace/venv` when the selected container provides it
 5. Runs the command
 
 **Option B — Manual 3-hop (for interactive sessions or debugging):**
@@ -122,6 +124,29 @@ ssh computelab "ssh \$(squeue -u \$USER -h -o '%N' | head -1) 'nvidia-smi'"
 ```
 
 ## Common Tasks
+
+### Rebuild Transformer Engine after code changes
+
+The experimental `test_container_2606` TE installation may be overwritten. Build
+both Blackwell targets used by the current B200/B300 allocations and retain complete
+unfiltered logs:
+
+```bash
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh -c test_container_2606 \
+    'cd /home/scratch.hhanyu_gpu/projects/moe/TE && \
+     export PATH=/home/hhanyu/.pixi.x86_64/bin:\$PATH && \
+     NVTE_BUILD_THREADS_PER_JOB=4 \
+     NVTE_CUDA_ARCHS=\"100;103a;\" \
+     NVTE_USE_CCACHE=1 \
+     /usr/bin/python3 -m pip install --no-build-isolation -e \".[test]\" --verbose \
+     > logs/te_build_\$(date +%Y%m%d_%H%M%S).log 2>&1'"
+```
+
+Use `/usr/bin/python3 -m pip` for the 26.06 container so Pixi's `PATH` addition for
+ccache does not accidentally select a different Python environment. Do not pipe
+build or test output through `tail`, `grep`, or other online filters.
+Inspect the persistent log only after the command finishes. The fallback ccache
+executable is `/home/hhanyu/.pixi.x86_64/bin/ccache`.
 
 ### Rebuild DeepEP after code changes
 

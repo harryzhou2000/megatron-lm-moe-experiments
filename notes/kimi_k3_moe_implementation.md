@@ -54,25 +54,25 @@ It is not `RMSNorm(W_up(u))`.
 
 ## Dependency baseline
 
-The source references and tested container packages are:
+The current `test_container_2606` runtime baseline is:
 
 | Component | Version | Source commit |
 | --- | --- | --- |
-| Transformer Engine | `2.19.0.dev0+f1d5f8d` | installed in `test_container_2606` |
+| Transformer Engine | `2.19.0.dev0+c0517995` | editable experimental build |
 | DeepEP / HybridEP | `1.2.1+e944b0d` | installed in `test_container_2606` |
-| CUTLASS / CuTe DSL | 4.5.0 | `e406c186f510a15091cce01f782020ceb7ba8eb5` |
+| CUTLASS / CuTe DSL | 4.4.2 | installed wheel |
 | cuDNN Frontend | 1.26.0 | `35fd7b0d0e1d4952b904c79341c5e84e3af0a328` |
 | cuda-python | 13.3.1 | installed in `test_container_2606` |
 
-`TE/3rdparty/cutlass` is updated to the official CUTLASS `v4.5.0` tag. The local
-cuDNN Frontend reference checkout is at `TE/3rdparty/cudnn-frontend` and is updated to
-`v1.26.0`. cuDNN Frontend 1.26.0 pins:
+The first validation used CuTe DSL 4.5.0. Its source reference remains the official
+CUTLASS `v4.5.0` tag at
+`e406c186f510a15091cce01f782020ceb7ba8eb5`. The local cuDNN Frontend reference
+checkout is v1.26.0. Upstream cuDNN Frontend 1.26.0 metadata pins 4.5.0, but the
+current container deliberately carries the 1.26.0 + 4.4.2 combination. MLM therefore
+feature-detects the API differences needed by that combination instead of assuming
+the upstream wheel pin.
 
-```text
-nvidia-cutlass-dsl[cu13]==4.5.0
-```
-
-The implementation references:
+The source references used by the implementation are:
 
 ```text
 TE/3rdparty/cutlass/python/CuTeDSL/cutlass/cute/
@@ -327,31 +327,55 @@ The installation is process-wide, idempotent for identical beta values, and reje
 second model requesting different beta values. The performance frontend inspects the
 fuser after warmup and fails unless `GroupedMLP_CuTeGEMMGLU` was actually selected.
 
-### CuTe DSL 4.5 NVVM compatibility shim
+### CuTe DSL compatibility shims
 
-In `test_container_2606`, the CuTe DSL 4.5 binding exposes `nvvm.atomicrmw` with an
-explicit result-type argument, while the cuDNN Frontend 1.26 grouped scheduler calls it
-without that argument. An MLM-local feature-detected shim infers the result type from the
-atomic input only when the installed signature requires it.
+The CuTe DSL 4.5 binding exposes `nvvm.atomicrmw` with an explicit result-type argument,
+while the cuDNN Frontend 1.26 grouped scheduler calls it without that argument. An
+MLM-local feature-detected shim infers the result type from the atomic input only when
+the installed signature requires it.
 
-The shim is necessary for the tested wheel combination and avoids editing TE/cuDNN
-packages or rebuilding the image.
+CuTe DSL 4.4.2 defines `OperandMajorMode` under
+`cutlass.cute.nvgpu.tcgen05`, while cuDNN Frontend 1.26.0 imports it from
+`cutlass.cute.nvgpu`. A second feature-detected shim re-exports the existing symbol
+before importing the grouped-GEMM modules. It does not replace the class or edit an
+installed package.
 
-## 3. Deferred QB extra Top-(k+1)
+Two additional 4.4.2 adapters bridge 4.5-era calls made by cuDNN Frontend 1.26.0:
+
+- `make_blockscaled_trivial_tiled_mma` accepts both the 4.4 single-A/B-dtype form
+  used by wgrad and the 4.5 separate-A/B-dtype form used by the grouped GLU
+  kernels; and
+- a raw CuTe `_Pointer` exposes the identity `.ptr` accessor expected by the
+  1.26.0 generated kernel.
+
+TE may cache grouped-MLP support as false before the `OperandMajorMode` export is
+installed. On that specific compatibility path, MLM clears the cached support
+decision and registers TE's existing `fuse_ops` rule. It does not implement or copy
+the TE grouped-MLP orchestration.
+
+All adapters are installed only when the corresponding API discrepancy is present.
+They avoid editing TE/cuDNN packages or rebuilding the image.
+
+## 3. QB integration remains deferred in MLM
 
 K3 QB requests Top-(k+1) on biased router scores. The first `k` experts are dispatched;
 the additional score supports the quantile/bias update and must not be dispatched.
 
-This work omits both the extra result and QB bias updates. Its raw arithmetic overhead
-should be small, but the current fused TE router is not friendly to the change:
+The MLM K3 frontend still omits both the extra result and QB bias updates. A separate
+TE experiment now implements Top-(k+1) plus QB histogram accumulation without
+dispatching the extra expert; see
+`notes/kimi_k3_qb_router_histogram_results.md`. That TE API is not wired into MCore's
+bias-update loop in this change.
+
+The original integration concern remains:
 
 - its APIs and output layouts are sized for exactly `topk`;
 - route indices, probabilities, workspaces, and static/CUDA-graph buffers assume `k`;
 - dispatch consumes every selected entry; and
 - a retained but non-dispatched `(k+1)`th entry requires a new output contract.
 
-The performance experiment therefore continues to use current auxiliary-loss-free bias
-balancing and measures only the latent RMSNorm and SiTU-GLU changes.
+The MLM performance frontend therefore continues to use current auxiliary-loss-free
+bias balancing and measures only the latent RMSNorm and SiTU-GLU changes.
 
 ## Testing and performance frontend
 
@@ -390,7 +414,7 @@ The launcher enables `MCORE_DEBUG_DENSE_ROUTING=1` by default and writes the com
 unfiltered eight-rank stdout/stderr stream to a timestamped file under
 `logs/moe_perf/`. `KIMI_K3_LOG_FILE` selects an exact destination.
 
-## Remote validation result
+## Original CuTe DSL 4.5 remote validation result
 
 Validation ran on:
 
@@ -446,17 +470,63 @@ MLM/logs/moe_perf/kimi_k3_hybridep_dense_routing_ep8.log
 The EP8 node successfully enabled CUDA forward compatibility. All standalone and grouped
 kernels compiled and ran successfully.
 
+## CuTe DSL 4.4.2 revalidation
+
+The current 1.26.0 + 4.4.2 baseline was revalidated on an NVIDIA B300 in
+`test_container_2606`.
+
+The focused suite passed:
+
+```text
+6 passed
+```
+
+It covers the PyTorch formula, activation selection and validation, BF16 and FP16
+standalone CuTe DSL forward/backward JIT execution, installation of the actual
+cuDNN grouped forward/backward SiTU-GLU subclasses, and TE grouped-MLP support
+registration. Without the `OperandMajorMode` compatibility shim, importing the
+cuDNN grouped kernels fails before compilation.
+
+An actual one-GPU MoE frontend run then selected:
+
+```text
+GroupedMLP_CuTeGEMMGLU
+```
+
+It compiled and executed grouped FC1/SiTU-GLU/FC2 forward, dGLU, quantization, and
+wgrad, then completed backward. The first JIT iteration took 22.2 seconds. The warm
+smoke iteration reported 5.067 ms forward and 3.306 ms backward. This validates
+kernel compatibility; it is not a representative K3 throughput measurement.
+
+The complete focused-suite log is:
+
+```text
+/home/scratch.hhanyu_gpu/projects/moe/MLM/logs/moe_perf/test_situ_glu_cutedsl_442_with_grouped_hook.log
+/home/scratch.hhanyu_gpu/projects/moe/MLM/logs/moe_perf/test_situ_glu_cutedsl_442_final.log
+/home/scratch.hhanyu_gpu/projects/moe/MLM/logs/moe_perf/situ_glu_grouped_runtime_1260_442_full_compat.log
+```
+
 ## Version compatibility assessment
 
 ### Confirmed
 
-The complete forward/backward path is confirmed only for:
+The original complete distributed forward/backward path is confirmed for:
 
 ```text
 TE 2.19.0.dev0+f1d5f8d
 CuTe DSL 4.5.0
 cuDNN Frontend 1.26.0
 SM103 / B300, including TP1/EP8
+```
+
+The current standalone and complete one-GPU grouped forward/backward path is
+confirmed for:
+
+```text
+TE 2.19.0.dev0+c0517995
+CuTe DSL 4.4.2
+cuDNN Frontend 1.26.0
+SM103 / B300, TP1/EP1 compatibility smoke
 ```
 
 TE must provide the operation-fuser APIs and `GroupedMLP_CuTeGEMMGLU`. The current MCore
@@ -475,9 +545,11 @@ cuDNN Frontend tags 1.23.0 through 1.26.0 contain the same
   from CuTe DSL 4.3.0 onward.
 
 This makes cuDNN Frontend 1.23.0 with CuTe DSL 4.4.1 a plausible lower pair, and
-1.24-1.26 with CuTe DSL 4.5.0 source-compatible pairs. They remain unverified because the
-grouped implementation subclasses private Python kernel classes; matching signatures do
-not guarantee identical kernel layouts or compiler behavior.
+1.24-1.26 with CuTe DSL 4.5.0 source-compatible pairs. Apart from the explicitly
+bridged and tested 1.26.0 + 4.4.2 baseline, those other combinations remain
+unverified because the grouped implementation subclasses private Python kernel
+classes; matching signatures do not guarantee identical kernel layouts or compiler
+behavior.
 
 CuTe DSL 4.2.0 is not compatible with the standalone launcher as written because it lacks
 the required TVM-FFI runtime interface. CuTe DSL 4.3.x has the needed public launcher
@@ -495,7 +567,8 @@ At runtime the implementation:
 The support policy for this experimental path should therefore be:
 
 ```text
-Supported and tested: CuTe DSL 4.5.0 + cuDNN Frontend 1.26.0 + tested TE build.
+Current baseline: CuTe DSL 4.4.2 + cuDNN Frontend 1.26.0 + MLM adapters + tested TE build.
+Historical full EP8 validation: CuTe DSL 4.5.0 + cuDNN Frontend 1.26.0.
 Other versions: best-effort only; accept only after the same GPU test suite passes.
 ```
 
