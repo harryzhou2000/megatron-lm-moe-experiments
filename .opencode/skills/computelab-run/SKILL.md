@@ -2,7 +2,6 @@
 name: computelab-run
 description: Run commands on remote GPU compute nodes via the computelab SLURM cluster. Use when the user wants to run tests, benchmarks, or any command on the remote GPU machine, or when they say "run on compute", "run remotely", "test on GPU", "run on computelab", or similar phrases.
 license: MIT
-compatibility: opencode
 ---
 
 # Computelab Run
@@ -220,6 +219,39 @@ Key environment variables for `test_hybrid_ep.py`:
 | `NUM_OF_STAGES_DISPATCH_API` | 10 | Dispatch SMEM pipeline stages |
 | `NUM_OF_IN_FLIGHT_S2G_DISPATCH_API` | 8 | Dispatch S2G in-flight TMA groups |
 
+### Run HybridEP with full-iteration CUDA graphs
+
+HybridEP graph capture requires the sync-free dispatch path. Before capture:
+
+1. Give HybridEP a fixed `num_permuted_tokens` upper bound.
+2. Ensure `dispatch_with_permute(..., non_blocking=True)` is selected.
+3. Warm up the exact dispatch/combine specialization before entering
+   `torch.cuda.graph`.
+4. Keep graph-owned dispatch handles alive through replay.
+
+In the MCore MoE perf frontend, use the frontend-specific static-capacity knob:
+
+```text
+--moe-perf-full-iter-cuda-graph
+--moe-perf-expert-rank-capacity-factor <factor>
+```
+
+Add `--moe-perf-paged-stash` when testing the overflow-recovery path. A value such
+as `1.2` is an expected-load budget with 20% slack; it is not a mathematical
+no-drop maximum. Check the persisted log for both
+`paged_stash_overflow=False` and `paged_stash_host_spill=False`.
+
+Do not attempt capture with a dynamic HybridEP receive size. If
+`num_permuted_tokens=None`, MCore selects `non_blocking=False`, and HybridEP uses
+host-visible metadata to derive the output size. CUDA stream capture will be
+invalidated. The final error may surface at a later `cudaGetLastError()` after
+the dispatch launch; treat that line as the observer, not automatically the
+root cause.
+
+For a strict no-drop bound with equal static input sizes, budget for the maximum
+routes that the TPxEP group can send to one rank. This consumes more memory than
+an expected-load factor. Record the chosen contract in the test log.
+
 ### Full sync-rebuild-test cycle
 
 ```bash
@@ -227,15 +259,17 @@ Key environment variables for `test_hybrid_ep.py`:
 rsync ~/projects/moe/DeepEP/ computelab:~/projects/moe/DeepEP/ -aPv \
     --exclude-from=$(realpath ~/.rsync-exclude)
 
-# 2. Rebuild + clear JIT + test (all in one)
+# 2. Rebuild + clear JIT + test (all in one, with complete persistent logs)
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
     'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
      rm -rf ~/.deepep/hybrid_ep/jit/ && \
      PYTORCH_NVCC=\"ccache nvcc\" NVCC_APPEND_FLAGS=\"--threads 8\" \
-     TORCH_CUDA_ARCH_LIST=\"10.3\" pip install --no-build-isolation . -v 2>&1 | tail -5 && \
+     TORCH_CUDA_ARCH_LIST=\"10.3\" pip install --no-build-isolation . -v \
+       > logs/deepep_build_\$(date +%Y%m%d_%H%M%S).log 2>&1 && \
      NUM_SMS_DISPATCH=24 NUM_SMS_COMBINE=24 HIDDEN_DIM=512 \
      NUM_TOKENS_PER_RANK=8192 NUM_LOCAL_EXPERTS=32 TOPK=36 \
-     python tests/test_hybrid_ep.py --num-processes 8'"
+     python tests/test_hybrid_ep.py --num-processes 8 \
+       > logs/hybrid_ep_test_\$(date +%Y%m%d_%H%M%S).log 2>&1'"
 ```
 
 ## Timeouts
