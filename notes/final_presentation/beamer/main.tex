@@ -1,0 +1,99 @@
+% Compile with: latexmk -xelatex -outdir=build main.tex
+\documentclass[aspectratio=169,10pt]{beamer}
+\usetheme{nvidialight}
+
+\title{Making Sparser MoE Practical}
+\subtitle{Router and expert-parallel optimizations}
+\author{Your name \enspace|\enspace Your team}
+\date{Internship final presentation \enspace|\enspace July 2026}
+\NvidiaSetFooter{Internal presentation}
+
+\begin{document}
+
+{\setbeamertemplate{footline}{}\begin{frame}[plain]
+  \titlepage
+\end{frame}}
+
+\NvidiaTransitionSlide{The performance problem changed}
+
+\begin{frame}{Target workload: wide routing, small expert compute}{Why routing became the critical path}
+  \NvidiaSource{Source: investigation configuration, EP72 training setup}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.53\textwidth}
+      \begin{itemize}
+        \item 2,304 experts and top-$k=36$ widen routing metadata.
+        \item 72 expert-parallel ranks turn routing into distributed data movement.
+        \item 512-wide experts make grouped GEMMs latency-sensitive.
+      \end{itemize}
+    \end{column}
+    \begin{column}{.42\textwidth}
+      \renewcommand{\arraystretch}{1.3}
+      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}l X@{}}
+        \toprule
+        Dimension & Value \\
+        \midrule
+        Total experts & 2,304 \\
+        Router top-$k$ & 36 \\
+        Expert parallelism & 72 \\
+        Local experts/rank & 32 \\
+        Latent hidden size & 512 \\
+        \bottomrule
+      \end{tabularx}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{One representation must survive every ownership boundary}{Avoid expanding routes at API boundaries}
+  \NvidiaSource{Source: final-presentation content note}
+  {\centering
+    \resizebox{\textwidth}{!}{\begin{tikzpicture}[node distance=0.14in, every node/.style={font=\scriptsize,align=center,text width=1.18in,minimum height=.64in}]
+      \node[draw=NvidiaRuleGray,fill=NvidiaLightGray] (router) {TE fused router};
+      \node[draw=NvidiaRuleGray,fill=NvidiaLightGray,right=of router] (mcore) {Megatron Core};
+      \node[draw=NvidiaRuleGray,fill=NvidiaLightGray,right=of mcore] (hybrid) {HybridEP route exchange};
+      \node[draw=NvidiaRuleGray,fill=NvidiaLightGray,right=of hybrid] (gemm) {Grouped GEMMs};
+      \draw[-{Latex[length=2mm]},line width=.8pt,NvidiaGreen] (router) -- node[above,font=\scriptsize,text=NvidiaGray]{selected IDs / weights} (mcore);
+      \draw[-{Latex[length=2mm]},line width=.8pt,NvidiaGreen] (mcore) -- node[above,font=\scriptsize,text=NvidiaGray]{compact $[T,K]$ map} (hybrid);
+      \draw[-{Latex[length=2mm]},line width=.8pt,NvidiaGreen] (hybrid) -- node[above,font=\scriptsize,text=NvidiaGray]{expert-contiguous tokens} (gemm);
+    \end{tikzpicture}}\par}
+  \vspace{0.03in}
+  \begin{NvidiaEvidence}{Design rule}
+    A compact route representation only pays off if it crosses the TE, Megatron Core, and HybridEP API boundaries without expanding back to $[T,E]$.
+  \end{NvidiaEvidence}
+\end{frame}
+
+\begin{frame}{Router and HybridEP optimizations improved the matched stack}{Each result uses its original benchmark scope}
+  \NvidiaSource{Source: benchmark notes; do not compare across benchmark suites}
+  \noindent\NvidiaMetric{10$\times$+}{large-$E$, large-$K$ router kernel speedup}{Isolated router result}\hfill
+  \NvidiaMetric{53.1\%}{matched end-to-end gain}{June benchmark set}\hfill
+  \NvidiaMetric{106.6\%}{later MoE-module-only gain}{Different test scope}
+  \vspace{0.03in}
+  \begin{NvidiaEvidence}{Interpretation}
+    Do not add isolated kernel speedups to predict training throughput: kernels overlap, metadata is reused differently by phase, and the critical path moves after every fix.
+  \end{NvidiaEvidence}
+\end{frame}
+
+\NvidiaTextImageFrame{Keep evidence and takeaway together}{Use a focused visual beside a concise interpretation}{assets/nvidia-cover-background.jpg}{Source: NVIDIA light presentation template}{%
+  {\NvidiaSansMedium\color{NvidiaGreen}The visual answers what happened.}\par
+  The copy explains why the visual matters to the audience.
+  \vspace{.08in}
+  \begin{itemize}
+    \item Use one clear focal point.
+    \item Keep the copy to one claim and two implications.
+  \end{itemize}
+}
+
+\NvidiaImageTextFrame{Image-left layouts add context}{The image leads; the copy provides meaning}{assets/nvidia-transition-background.jpg}{Source: NVIDIA light presentation template}{%
+  {\NvidiaSansMedium\color{NvidiaGreen}Use this for context-first storytelling.}\par
+  The visual establishes the setting before the speaker explains the consequence.
+  \vspace{.08in}
+  \begin{itemize}
+    \item Prefer one image, not a collage.
+    \item Use a 1:1 or 4:5 crop for more visual weight.
+  \end{itemize}
+}
+
+\NvidiaWideImageFrame{Wide images set the context}{Use the 16:9 one-up pattern for a single visual}{assets/nvidia-cover-background.jpg}{Source: NVIDIA light presentation template}{Use a high-resolution 16:9 image so the visual remains legible at presentation distance.}
+
+\NvidiaTransitionSlide{Thank you}
+
+\end{document}

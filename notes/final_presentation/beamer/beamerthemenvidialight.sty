@@ -1,0 +1,201 @@
+% NVIDIA-light Beamer theme derived from NVIDIA_PPT_Light_External_v2.potx.
+% This is a visual adaptation for LaTeX; it is not an official NVIDIA template.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{beamerthemenvidialight}[2026/07/29 NVIDIA light presentation theme]
+
+\RequirePackage{fontspec}
+\RequirePackage{graphicx}
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\RequirePackage{booktabs}
+\RequirePackage{array}
+\RequirePackage{tabularx}
+\RequirePackage{ragged2e}
+
+\mode<presentation>
+
+% Palette extracted from the supplied NVIDIA PowerPoint theme.
+\definecolor{NvidiaGreen}{HTML}{76B900}
+\definecolor{NvidiaTeal}{HTML}{1DBBA4}
+\definecolor{NvidiaBlue}{HTML}{0074DF}
+\definecolor{NvidiaPurple}{HTML}{952FC6}
+\definecolor{NvidiaOrange}{HTML}{EF9100}
+\definecolor{NvidiaBlack}{HTML}{000000}
+\definecolor{NvidiaCharcoal}{HTML}{313131}
+\definecolor{NvidiaGray}{HTML}{757575}
+\definecolor{NvidiaLightGray}{HTML}{F7F7F7}
+\definecolor{NvidiaRuleGray}{HTML}{D9D9D9}
+
+% Use the supplied managed NVIDIA Sans files when available; retain a portable fallback.
+\IfFileExists{/Library/Fonts/Managed/NVIDIASans-Regular_1357495649.ttf}{
+  \setsansfont{NVIDIASans-Regular_1357495649}[
+    Path=/Library/Fonts/Managed/,
+    Extension=.ttf,
+    BoldFont=NVIDIASans-Bold_3059767565,
+    ItalicFont=NVIDIASans-Italic_1086104804,
+    BoldItalicFont=NVIDIASans-BoldItalic_4041623657
+  ]
+  \newfontfamily\NvidiaSansMedium{NVIDIASans-Medium_4255550447}[
+    Path=/Library/Fonts/Managed/,
+    Extension=.ttf
+  ]
+}{
+  \IfFontExistsTF{NVIDIA Sans}{
+    \setsansfont{NVIDIA Sans}
+    \newfontfamily\NvidiaSansMedium{NVIDIA Sans Medium}
+  }{
+    \setsansfont{Helvetica Neue}
+    \newfontfamily\NvidiaSansMedium{Helvetica Neue}
+  }
+}
+\renewcommand{\familydefault}{\sfdefault}
+
+\setbeamersize{text margin left=0.38in,text margin right=0.38in}
+\setlength{\parskip}{0.30em}
+\setlength{\tabcolsep}{0.55em}
+\renewcommand{\arraystretch}{1.18}
+
+\setbeamercolor{normal text}{fg=NvidiaCharcoal,bg=white}
+\setbeamercolor{structure}{fg=NvidiaGreen}
+\setbeamercolor{title}{fg=NvidiaBlack}
+\setbeamercolor{subtitle}{fg=NvidiaCharcoal}
+\setbeamercolor{frametitle}{fg=NvidiaBlack,bg=white}
+\setbeamercolor{framesubtitle}{fg=NvidiaCharcoal,bg=white}
+\setbeamercolor{footline}{fg=NvidiaGray,bg=white}
+\setbeamercolor{alerted text}{fg=NvidiaGreen}
+\setbeamercolor{block title}{fg=NvidiaBlack,bg=NvidiaLightGray}
+\setbeamercolor{block body}{fg=NvidiaCharcoal,bg=NvidiaLightGray}
+\setbeamercolor{itemize item}{fg=NvidiaGreen}
+\setbeamercolor{itemize subitem}{fg=NvidiaGreen}
+\setbeamercolor{enumerate item}{fg=NvidiaGreen}
+
+\setbeamerfont{title}{family=\NvidiaSansMedium,series=\mdseries,size=\fontsize{27}{31}}
+\setbeamerfont{subtitle}{size=\fontsize{14}{18}}
+\setbeamerfont{frametitle}{family=\NvidiaSansMedium,series=\mdseries,size=\fontsize{20}{24}}
+\setbeamerfont{framesubtitle}{size=\fontsize{11}{14}}
+\setbeamerfont{normal text}{size=\fontsize{11}{14}}
+\setbeamerfont{footline}{size=\fontsize{7.5}{9}}
+\setbeamerfont{author}{size=\fontsize{10}{13}}
+\setbeamerfont{date}{size=\fontsize{9}{12}}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize items}[circle]
+\setbeamertemplate{itemize subitem}{\raise0.2ex\hbox{\tiny\textcolor{NvidiaGreen}{\textbullet}}}
+\setbeamertemplate{enumerate items}[default]
+\setbeamertemplate{sections/subsections in toc}[square]
+\setbeamertemplate{blocks}[rounded][shadow=false]
+
+\newcommand{\NvidiaFooterText}{}
+\newcommand{\NvidiaSetFooter}[1]{\renewcommand{\NvidiaFooterText}{#1}}
+\newcommand{\NvidiaSource}[1]{\gdef\insertNvidiaSource{#1}}
+\newcommand{\insertNvidiaSource}{}
+\newcommand{\NvidiaResetSource}{\gdef\insertNvidiaSource{}}
+\newcommand{\NvidiaWordmark}{\includegraphics[height=.18in]{assets/nvidia-footer-logo.png}}
+
+\setbeamertemplate{frametitle}{%
+  \vspace*{0.27in}%
+  \nointerlineskip\strut\insertframetitle\par
+  \ifblank{\insertframesubtitle}{}{\vspace*{0.06in}{\usebeamerfont{framesubtitle}\usebeamercolor[fg]{framesubtitle}\insertframesubtitle\par}}%
+  \vspace*{0.20in}%
+}
+
+\setbeamertemplate{footline}{%
+  \leavevmode\hbox{%
+    \begin{beamercolorbox}[wd=.18\paperwidth,ht=0.18in,dp=0.08in,leftskip=.333in]{footline}%
+      \insertframenumber
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.60\paperwidth,ht=0.18in,dp=0.08in,center]{footline}%
+      \insertNvidiaSource\ifx\insertNvidiaSource\empty\else\hspace{1.1em}\fi\NvidiaFooterText
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.22\paperwidth,ht=0.18in,dp=0.08in,rightskip=.667in plus1fil]{footline}%
+      \hfill\NvidiaWordmark
+    \end{beamercolorbox}%
+  }%
+  \NvidiaResetSource
+}
+
+\setbeamertemplate{title page}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{assets/nvidia-cover-background.jpg}};
+    \node[anchor=north west,inner sep=0] at ([xshift=.27in,yshift=-.38in]current page.north west) {\includegraphics[width=1.31in]{assets/nvidia-cover-logo.png}};
+    \node[anchor=north west,text=NvidiaBlack,align=left,text width=.52\paperwidth]
+      at ([xshift=.38in,yshift=-1.85in]current page.north west) {\usebeamerfont{title}\inserttitle};
+    \node[anchor=south west,text=NvidiaCharcoal,align=left,text width=.47\paperwidth]
+      at ([xshift=.38in,yshift=.58in]current page.south west) {\usebeamerfont{author}\insertauthor};
+    \node[anchor=south west,text=NvidiaGray,align=left,text width=.47\paperwidth]
+      at ([xshift=.38in,yshift=.38in]current page.south west) {\usebeamerfont{date}\insertdate};
+  \end{tikzpicture}%
+  \mbox{}%
+}
+
+% Template-derived transition layout.
+\newcommand{\NvidiaTransitionSlide}[1]{%
+  \begin{frame}[plain]
+    \begin{tikzpicture}[remember picture,overlay]
+      \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{assets/nvidia-transition-background.jpg}};
+      \node[anchor=north west,text=NvidiaBlack,text width=.55\paperwidth,align=left]
+        at ([xshift=3.05in,yshift=-.20in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{27}{32}\selectfont #1};
+    \end{tikzpicture}
+  \end{frame}%
+}
+
+% A compact metric for causal claims and benchmark results.
+\newcommand{\NvidiaMetric}[3]{%
+  \begin{minipage}[t]{.29\textwidth}\raggedright
+    {\NvidiaSansMedium\fontsize{20}{24}\selectfont\color{NvidiaBlack}#1}\par
+    {\fontsize{8.5}{11}\selectfont\color{NvidiaCharcoal}#2}\par
+    {\fontsize{8}{10}\selectfont\color{NvidiaGray}#3}
+  \end{minipage}%
+}
+
+% Neutral evidence block for explanatory annotations.
+\newenvironment{NvidiaEvidence}[1]{%
+  \par\vspace{.06in}\noindent{\NvidiaSansMedium\color{NvidiaGreen}\normalsize #1}\par\vspace{.03in}\small\justifying
+}{}
+
+% Image layouts derived from the template's one-up and text-plus-image pages.
+% Supply images that match the intended slot ratio so they remain uncropped.
+\newcommand{\NvidiaImageCaption}[1]{%
+  {\fontsize{7.5}{9}\selectfont\color{NvidiaGray}\raggedright #1\par}%
+}
+
+\newcommand{\NvidiaTextImageFrame}[5]{%
+  \begin{frame}{#1}{#2}
+    \NvidiaSource{#4}%
+    \begin{columns}[T,onlytextwidth]
+      \begin{column}{.43\textwidth}
+        \vspace*{.06in}\raggedright #5
+      \end{column}
+      \begin{column}{.52\textwidth}
+        \centering\vspace*{.02in}%
+        \includegraphics[width=\linewidth,height=1.88in,keepaspectratio]{#3}
+      \end{column}
+    \end{columns}
+  \end{frame}%
+}
+
+\newcommand{\NvidiaImageTextFrame}[5]{%
+  \begin{frame}{#1}{#2}
+    \NvidiaSource{#4}%
+    \begin{columns}[T,onlytextwidth]
+      \begin{column}{.52\textwidth}
+        \centering\vspace*{.02in}%
+        \includegraphics[width=\linewidth,height=1.88in,keepaspectratio]{#3}
+      \end{column}
+      \begin{column}{.43\textwidth}
+        \vspace*{.06in}\raggedright #5
+      \end{column}
+    \end{columns}
+  \end{frame}%
+}
+
+\newcommand{\NvidiaWideImageFrame}[5]{%
+  \begin{frame}{#1}{#2}
+    \NvidiaSource{#4}%
+    \centering\vspace*{.02in}%
+    \includegraphics[width=.78\textwidth,height=1.78in,keepaspectratio]{#3}\par
+    \vspace*{.04in}\begin{minipage}{.78\textwidth}\NvidiaImageCaption{#5}\end{minipage}
+  \end{frame}%
+}
+
+\mode<all>
