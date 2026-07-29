@@ -87,6 +87,36 @@ Recommendation: use `fused_atomic` as the default experimental QB path, while
 retaining `two_kernel` as a reference and as a possible alternative if larger
 expert/bin configurations make global atomic contention dominant.
 
+## MCore integration
+
+MCore branch `hhanyu/qwen35-opt` now feature-detects the three TE QB arguments and
+threads only the recommended `fused_atomic` path. Each router owns a persistent FP32
+`qb_bin_bounds[2]` buffer and a nonpersistent int32
+`qb_histogram[num_experts, num_bins]`. `finalize_model_grads` performs one stacked
+TPxDPxCP histogram all-reduce for all local MoE layers, recovers and mean-centers the
+quantile biases, updates both bias and bounds in place, then clears the histogram.
+
+The K3-like perf launcher supports either:
+
+```text
+BIAS_UPDATE_METHOD=quantile
+BIAS_UPDATE_METHOD=sign
+```
+
+EP2 validation on `umb-b300-dp-189` used HybridEP dense routing and MXFP8 grouped
+SiTU-GLU. At the K3 router shape (`E=896`, Top-16, 1,000 bins), five measured
+warm-cache iterations reported:
+
+| Method | Forward | Backward | Finalization | End to end |
+| --- | ---: | ---: | ---: | ---: |
+| sign | 15.573 ms | 13.225 ms | 0.589 ms | 29.387 ms |
+| quantile | 15.333 ms | 13.160 ms | 0.761 ms | 29.254 ms |
+
+The QB-specific step-end overhead versus signed updating was about 0.17 ms in this
+small one-layer EP2 harness. Full-iteration CUDA graph capture failed in HybridEP for
+both QB and signed controls at the same `cudaErrorStreamCaptureInvalidated` site, so
+that limitation is not caused by the QB integration.
+
 ## Environment and Logs
 
 Final environment:

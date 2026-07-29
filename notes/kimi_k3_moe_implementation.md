@@ -7,15 +7,17 @@ This note specifies and records the test-oriented Megatron Core implementation o
 1. Transformer Engine RMSNorm immediately before the routed latent up-projection.
 2. SiTU-GLU forward and backward, including dense FFNs, routed experts, and shared
    experts.
-3. The existing auxiliary-loss-free router path without K3 Quantile Balancing (QB).
+3. Auxiliary-loss-free routing with either the existing signed bias update or K3
+   Quantile Balancing (QB).
 
 The implementation is exercised through
 `tests/functional_tests/test_cases/common/moe_perf/recipe_frontend.py`. It is opt-in
 and lives in Megatron-LM (MLM), so it can be tested with an existing Transformer Engine
 (TE) installation without rebuilding TE or the container image.
 
-Shared-expert overlap is out of scope. QB bias updates, histogram maintenance, and the
-extra Top-(k+1) result are deferred.
+Shared-expert overlap is out of scope. The fused TE router owns the QB Top-(k+1)
+selection and local histogram accumulation; MCore owns persistent bounds, distributed
+histogram reduction, and step-end bias updates.
 
 ## Architecture and operation order
 
@@ -572,9 +574,120 @@ Historical full EP8 validation: CuTe DSL 4.5.0 + cuDNN Frontend 1.26.0.
 Other versions: best-effort only; accept only after the same GPU test suite passes.
 ```
 
+## 3. Quantile Balancing integration
+
+### Knobs and compatibility gate
+
+The auxiliary-loss-free router keeps its existing behavior by default:
+
+```text
+--moe-router-bias-update-method sign
+```
+
+K3 QB is selected with:
+
+```text
+--moe-router-enable-expert-bias
+--moe-router-bias-update-method quantile
+--moe-router-qb-num-bins 1000
+--moe-router-score-function sigmoid
+--moe-router-pre-softmax
+--moe-router-fusion
+```
+
+MCore inspects the installed TE Python signature and enables QB only when
+`fused_topk_with_score_function` exposes `qb_histogram`, `qb_bin_bounds`, and
+`qb_histogram_mode`. It always requests `qb_histogram_mode="fused_atomic"`; the
+two-kernel TE path remains available for isolated TE testing but is not threaded into
+MCore.
+
+The current MCore QB path rejects grouped routing, token dropping, non-sigmoid scoring,
+post-Top-k normalization, unfused routing, and padding masks. Padding is rejected because
+the current TE histogram API has no valid-token mask.
+
+### Router state and step lifecycle
+
+Each QB router follows the existing `expert_bias` ownership pattern and registers:
+
+```text
+expert_bias    float32 [num_experts]             persistent
+qb_bin_bounds  float32 [2]                       persistent
+qb_histogram   int32   [num_experts, num_bins]   nonpersistent
+```
+
+`qb_bin_bounds` starts at `[-1, 1]` and remains the same CUDA allocation so graph-facing
+kernel arguments keep a stable pointer. The step-local histogram also remains in place
+but is omitted from checkpoints.
+
+For every training forward that records gradients, the TE fused router:
+
+1. selects Top-(k+1) using raw sigmoid score plus the current expert bias;
+2. emits only the actual Top-k routes and probabilities;
+3. computes `r[i,j] = alpha[i] - sigmoid(logit[i,j])`; and
+4. atomically accumulates one int32 bin for every token-expert pair.
+
+Histogram counts accumulate across gradient-accumulation microbatches. During
+`finalize_model_grads`, MCore stacks all local MoE-layer histograms, performs one int32
+all-reduce over the existing TPxDPxCP group, recovers each expert's target quantile,
+linearly interpolates inside its selected bin, mean-centers the resulting biases, and
+updates `expert_bias` and the next bounds in place. The next range is exactly:
+
+```text
+[min(updated_expert_bias) - 1, max(updated_expert_bias) + 1]
+```
+
+The histogram is then zeroed by the normal temporary-tensor reset. No score matrix,
+bin-index matrix, bias-handle registry, or extra broadcast is introduced.
+
+### EP2 validation and performance
+
+Validation used `umb-b300-dp-189`, `test_container_2606`, two B300 GPUs, TP1/EP2,
+HybridEP dense routing, MXFP8 grouped SiTU-GLU, and the installed TE fused-atomic QB API.
+The focused router suite passed 4 tests and the step-finalization test passed. Pointer
+stability, repeated-forward histogram accumulation, persistent bounds, nonpersistent
+histograms, exact quantile recovery, and reset behavior were checked.
+
+Warm-cache one-layer results:
+
+| Experts / Top-k | Method | Forward | Backward | Bias finalization | End to end |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 8 / 1 | sign | 2.896 ms | 2.672 ms | 0.426 ms | 5.995 ms |
+| 8 / 1 | quantile | 2.771 ms | 2.252 ms | 0.758 ms | 5.780 ms |
+| 896 / 16 | sign | 15.573 ms | 13.225 ms | 0.589 ms | 29.387 ms |
+| 896 / 16 | quantile | 15.333 ms | 13.160 ms | 0.761 ms | 29.254 ms |
+
+The small timing differences in forward/backward are noise-scale for this smoke harness.
+The measurable QB cost is the histogram all-reduce and quantile update: about 0.17 ms
+over signed updating at the K3 router shape in this EP2 run. An
+`896 x 1000 x int32` histogram occupies about 3.42 MiB per MoE layer.
+
+`MCORE_DEBUG_DENSE_ROUTING=1` confirmed that the fused TE router returned dense int16
+Top-k indices and HybridEP consumed them without reconstructing indices from a sparse or
+boolean routing map.
+
+Full-iteration CUDA graph capture currently fails inside
+`deep_ep/backend/hybrid_ep_backend.cuh:6000` with
+`cudaErrorStreamCaptureInvalidated`. The identical signed-bias control fails at the same
+point, so this is a pre-existing HybridEP/full-iteration graph limitation rather than a
+QB buffer or pointer issue. Eager EP2 is the validated path.
+
+Persistent logs:
+
+```text
+MLM/logs/qb_mcore/test_router_quantile_final.log
+MLM/logs/qb_mcore/test_finalize_qb.log
+MLM/logs/qb_mcore/k3_qb_ep2_eager_warm.log
+MLM/logs/qb_mcore/k3_sign_ep2_eager.log
+MLM/logs/qb_mcore/k3_qb_e896_top16_ep2.log
+MLM/logs/qb_mcore/k3_sign_e896_top16_ep2.log
+MLM/logs/qb_mcore/k3_qb_ep2_graph.log
+MLM/logs/qb_mcore/k3_sign_ep2_graph.log
+```
+
 ## Follow-up work intentionally excluded
 
-- QB Top-(k+1), histograms, and bias update.
+- Padding-mask support in the TE QB histogram API.
+- HybridEP full-iteration CUDA graph capture support.
 - Shared-expert overlap.
 - A public TE or cuDNN Frontend SiTU-GLU operation.
 - Mixed SiTU-GLU and SwiGLU models in one Python process.
