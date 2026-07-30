@@ -112,8 +112,7 @@
 \begin{frame}{LatentMoE Cost Model}{Latent representations reduce exchange payload, not expert computation}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Expert computation}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.10in}
+      {\NvidiaSansMedium Expert computation}\NvidiaTightRule{.6pt}\vspace{.10in}
       \[
         \mathrm{FLOPs}_{\mathrm{expert}} \propto T K H_{\mathrm{latent}} H_{\mathrm{expert}}
       \]
@@ -121,8 +120,7 @@
       down/up projections are absent (zero cost) and $H_{\mathrm{latent}}=H$.
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Token exchange}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.10in}
+      {\NvidiaSansMedium Token exchange}\NvidiaTightRule{.6pt}\vspace{.10in}
       \[
         \text{payload} \propto T K H_{\mathrm{latent}}
       \]
@@ -143,15 +141,13 @@
 \begin{frame}{Experimental Configuration}{A Qwen3-Next-derived latent-MoE training model isolates large-expert sparse-path costs}
   \noindent
   \begin{minipage}[t]{.46\textwidth}
-    {\NvidiaSansMedium Backbone \& Attention}\par\vspace{-.06in}
-    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    {\NvidiaSansMedium Backbone \& Attention}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
     \fontsize{8.5}{10}\selectfont 24 layers; $H=2{,}048$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont GQA: 32 Q / 2 KV groups; GDN disabled
   \end{minipage}
   \hfill
   \begin{minipage}[t]{.46\textwidth}
-    {\NvidiaSansMedium Latent MoE}\par\vspace{-.06in}
-    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    {\NvidiaSansMedium Latent MoE}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
     \fontsize{8.5}{10}\selectfont $2{,}304$ experts; top-$k=36$; $H_{\mathrm{latent}}=512$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont FFN/shared width $512$; EP72; 32 E/rank
   \end{minipage}
@@ -170,8 +166,7 @@
     \end{minipage}
   \end{minipage}\hfill
   \begin{minipage}[t]{.55\textwidth}
-    {\NvidiaSansMedium Recipe}\par\vspace{-.06in}
-    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    {\NvidiaSansMedium Recipe}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
     \fontsize{8.5}{10}\selectfont 4K tokens; NV72 systems (GB200 / GB300).\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont 1F1B; paged stash; full-iteration CUDA graph.
@@ -199,8 +194,7 @@
       \end{tabularx}
     \end{column}
     \begin{column}{.40\textwidth}
-      {\NvidiaSansMedium Principal bottlenecks}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Principal bottlenecks}\NvidiaTightRule{.6pt}\vspace{.05in}
       \begin{enumerate}
         \item CPU launch overhead from many small kernels.
         \item Fused-router degradation at large $E$ and $K$.
@@ -248,8 +242,7 @@ cuda_graph.replay()
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Repeated maximum selection}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium Repeated maximum selection}\NvidiaTightRule{.6pt}\vspace{.08in}
       \small A rank-$r$ pass scans $E$ scores and checks up to $r-1$ prior IDs:
       \[
         \sum_{r=1}^{K} E\,r = \alert{O(EK^2)}.
@@ -259,8 +252,7 @@ cuda_graph.replay()
       selected rank.
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Radix selection}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium Radix selection}\NvidiaTightRule{.6pt}\vspace{.08in}
       \small FP32 order bits are narrowed by eight 4-bit passes, followed by a constant
       number of gathers:
       \[
@@ -298,8 +290,7 @@ gather ties in index order until topk
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.45\textwidth}
-      {\NvidiaSansMedium Two phases}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Two phases}\NvidiaTightRule{.6pt}\vspace{.07in}
       \begin{enumerate}
         \item Count matching scores in 16 buckets; choose the bucket containing rank $K$.
         \item Gather scores above the final value; use ordered ties to complete exactly $K$ IDs.
@@ -330,8 +321,7 @@ for (int pass = kPasses - 1; pass >= 0; --pass) {
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.37\textwidth}
-      {\NvidiaSansMedium One warp / token}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium One warp / token}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small The implementation maps a token row to a warp. Each lane strides across experts,
       then warp reductions combine 16 bucket counts.
       \vspace{.10in}
@@ -349,28 +339,23 @@ for (int pass = kPasses - 1; pass >= 0; --pass) {
   \vspace{.04in}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.19\textwidth}
-      {\NvidiaSansMedium Loop fusion}\par\vspace{.04in}
-      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Loop fusion}\NvidiaTightRule{.6pt}\vspace{.05in}
       \small Merge clear, load, score, save, and bias work where the score path permits.
     \end{column}
     \begin{column}{.19\textwidth}
-      {\NvidiaSansMedium Async load}\par\vspace{.04in}
-      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Async load}\NvidiaTightRule{.6pt}\vspace{.05in}
       \small Double-buffer raw logits and use a persistent grid sized by occupancy.
     \end{column}
     \begin{column}{.19\textwidth}
-      {\NvidiaSansMedium Packed radix}\par\vspace{.04in}
-      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Packed radix}\NvidiaTightRule{.6pt}\vspace{.05in}
       \small Store sixteen counters in four 32-bit registers instead of 32 registers.
     \end{column}
     \begin{column}{.19\textwidth}
-      {\NvidiaSansMedium Static score}\par\vspace{.04in}
-      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Static score}\NvidiaTightRule{.6pt}\vspace{.05in}
       \small Instantiate score functions at compile time to remove hot-path branches.
     \end{column}
     \begin{column}{.19\textwidth}
-      {\NvidiaSansMedium Merged head}\par\vspace{.04in}
-      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      {\NvidiaSansMedium Merged head}\NvidiaTightRule{.6pt}\vspace{.05in}
       \small Keep a specialized small-$k$ head while routing large shapes to the optimized head.
     \end{column}
   \end{columns}
@@ -403,8 +388,7 @@ if constexpr (ScoreFunc == kSigmoid) {
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.37\textwidth}
-      {\NvidiaSansMedium Fused dataflow}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Fused dataflow}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small A single strided loop converts logits, evaluates the score function, preserves the
       value required by backward, applies optional bias, and populates selection input.
       \vspace{.10in}
@@ -432,8 +416,7 @@ cp_async_commit();
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.38\textwidth}
-      {\NvidiaSansMedium Overlap policy}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Overlap policy}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small The loader keeps the original input dtype in shared memory, deferring conversion to
       compute. It uses 16-byte vector copies on supported GPUs and a scalar fallback otherwise.
       \vspace{.10in}
@@ -461,8 +444,7 @@ unsigned total = warp_allreduce_sum(count);
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.38\textwidth}
-      {\NvidiaSansMedium Why it is safe}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Why it is safe}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small Each lane sees at most $\lceil E/32\rceil$ scores per bucket. For $E=2{,}304$,
       the largest count is 72, which fits in an 8-bit field.
       \vspace{.10in}
@@ -490,8 +472,7 @@ else if constexpr (ScoreFunc == kSqrtsoftplus)
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.40\textwidth}
-      {\NvidiaSansMedium Specialization}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Specialization}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small The launcher performs the score-function switch once, then each instantiated
       kernel contains only its required math and synchronization.
       \vspace{.10in}
@@ -516,8 +497,7 @@ else
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.37\textwidth}
-      {\NvidiaSansMedium Shape-aware dispatch}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Shape-aware dispatch}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small The simple head avoids async-loader and persistent-grid overhead on conventional
       small-$k$ shapes. The optimized head is selected only when radix work dominates.
       \vspace{.10in}
@@ -531,8 +511,7 @@ else
     \texttt{notes/dense\_routing\_rebase\_design.md}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Per-token representation}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium Per-token representation}\NvidiaTightRule{.6pt}\vspace{.08in}
       \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r r@{}}
         Format & Shape & Bytes/token \\
         \midrule
@@ -544,8 +523,7 @@ else
       \]
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Target batch}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium Target batch}\NvidiaTightRule{.6pt}\vspace{.08in}
       \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r@{}}
         Local metadata, $T=8{,}192$ & Size \\
         \midrule
@@ -577,8 +555,7 @@ if constexpr (IndexType == int16_t)
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.38\textwidth}
-      {\NvidiaSansMedium Producer contract}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Producer contract}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small The selected ID output is optional: legacy bytemap/bitmap callers retain their
       existing format, while dense-route callers receive $[T,K]$ indices directly from the
       fused selection result.
@@ -605,8 +582,7 @@ for (int k = lane_id; k < topk; k += 32) {
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.38\textwidth}
-      {\NvidiaSansMedium Complexity change}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      {\NvidiaSansMedium Complexity change}\NvidiaTightRule{.6pt}\vspace{.07in}
       \small Replace repeated membership tests of every expert against a $K$-entry list with a
       dense zero-fill plus direct writes to selected locations:
       \[
@@ -623,8 +599,7 @@ for (int k = lane_id; k < topk; k += 32) {
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium HBM traffic floor}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium HBM traffic floor}\NvidiaTightRule{.6pt}\vspace{.08in}
       \small Semantic traffic is approximately 245 MB:
       \[
         245\text{ MB}/8\text{ TB/s}=\alert{30.7\,\mu\text{s}}.
@@ -634,8 +609,7 @@ for (int k = lane_id; k < topk; k += 32) {
       {\scriptsize\color{NvidiaGray}Tensor bytes only; cache-line and instruction overhead are excluded.}
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Compute-issue floor}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      {\NvidiaSansMedium Compute-issue floor}\NvidiaTightRule{.6pt}\vspace{.08in}
       \small Eight radix passes touch 151M scores:
       \[
         8\!\times\!8192\!\times\!2304=151\text{M}.
@@ -1002,8 +976,7 @@ validate the selected tuple in the EP72 launch
     \texttt{notes/dense\_routing\_rebase\_design.md}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Collaborating workstreams}\par
-      \vspace{.04in}\textcolor{NvidiaGreen}{\rule{\linewidth}{.7pt}}\vspace{.05in}
+      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Collaborating workstreams}\NvidiaTightRule{.7pt}\vspace{.05in}
       \begin{itemize}
         \item Paged stash for bounded activation storage.
         \item Full-iteration CUDA graph capture and replay.
@@ -1012,8 +985,7 @@ validate the selected tuple in the EP72 launch
       \end{itemize}
     \end{column}
     \begin{column}{.48\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Delivered plumbing}\par
-      \vspace{.04in}\textcolor{NvidiaGreen}{\rule{\linewidth}{.7pt}}\vspace{.05in}
+      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Delivered plumbing}\NvidiaTightRule{.7pt}\vspace{.05in}
       \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.5}{9}\selectfont]
 if te.has_dense_route_output() and \
    dispatcher.accepts_dense_route():
@@ -1075,8 +1047,7 @@ else:
 \begin{frame}{Conclusions}{Key findings and applicability limits}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.46\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Findings}\par
-      \vspace{.04in}\textcolor{NvidiaGreen}{\rule{\linewidth}{.7pt}}\vspace{.05in}
+      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Findings}\NvidiaTightRule{.7pt}\vspace{.05in}
       \small
       \begin{itemize}
         \item Radix selection resolves the pathological large-$E$, large-$K$ case.
@@ -1087,8 +1058,7 @@ else:
       \end{itemize}
     \end{column}
     \begin{column}{.46\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Scope}\par
-      \vspace{.04in}\textcolor{NvidiaGreen}{\rule{\linewidth}{.7pt}}\vspace{.05in}
+      {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Scope}\NvidiaTightRule{.7pt}\vspace{.05in}
       \small
       \begin{itemize}
         \item Do not aggregate isolated speedups into end-to-end predictions.

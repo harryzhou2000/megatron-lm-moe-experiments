@@ -162,6 +162,11 @@
   \par\vspace{.06in}\noindent{\NvidiaSansMedium\color{NvidiaGreen}\normalsize #1}\par\vspace{.03in}\small\justifying
 }{}
 
+% Compact heading-to-rule treatment for explanatory blocks.
+\newcommand{\NvidiaTightRule}[2][\linewidth]{%
+  \par\vspace{-.06in}{\color{NvidiaGreen}\rule{#1}{#2}}\par
+}
+
 \newenvironment{NvidiaCard}[1]{%
   \begin{beamercolorbox}[rounded=true,sep=.12in,wd=\linewidth]{block body}%
     {\NvidiaSansMedium\color{NvidiaBlack}#1}\par\vspace{.04in}\small
