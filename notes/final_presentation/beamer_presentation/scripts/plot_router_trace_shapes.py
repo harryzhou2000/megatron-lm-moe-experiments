@@ -49,10 +49,19 @@ def load_measurements(data_dir: Path) -> pd.DataFrame:
     return pd.concat(records, ignore_index=True)
 
 
-def plot_one(data: pd.DataFrame, kernel: str, test_pass: str, score_function: str, output: Path) -> None:
-    # Match the deck's wide plot slot while retaining enough vertical space for
-    # the seven-shape labels and the first-panel legend.
-    fig, axes = plt.subplots(1, len(TOKENS), figsize=(13.0, 4.2), sharey=True)
+def plot_one(
+    data: pd.DataFrame,
+    kernel: str,
+    test_pass: str,
+    score_function: str,
+    tokens_subset: tuple[int, ...],
+    output: Path,
+) -> None:
+    # Two panels per slide preserve the complete token sweep while giving the
+    # legend, axes, and seven-shape labels enough projected size.
+    fig, axes = plt.subplots(1, len(tokens_subset), figsize=(13.0, 4.2), sharey=True)
+    if len(tokens_subset) == 1:
+        axes = (axes,)
     subset = data[
         (data["kernel"] == kernel)
         & (data["test_pass"] == test_pass)
@@ -61,7 +70,7 @@ def plot_one(data: pd.DataFrame, kernel: str, test_pass: str, score_function: st
     ymax = 1.08 * max(subset["fused_gbps"].max(), subset["ref_gbps"].max())
     x = list(range(len(SHAPES)))
 
-    for col, tokens in enumerate(TOKENS):
+    for col, tokens in enumerate(tokens_subset):
         ax = axes[col]
         panel = subset[subset["num_tokens"] == tokens]
         reference = panel.groupby("shape")["ref_gbps"].mean()
@@ -87,16 +96,16 @@ def plot_one(data: pd.DataFrame, kernel: str, test_pass: str, score_function: st
                 markersize=3.6,
                 label=checkpoint if col == 0 else None,
             )
-        ax.set_title(f"T={tokens}", fontsize=9)
-        ax.set_xticks(x, SHAPES, rotation=35, ha="right", fontsize=7.5)
+        ax.set_title(f"T={tokens}", fontsize=10)
+        ax.set_xticks(x, SHAPES, rotation=35, ha="right", fontsize=8.5)
         ax.set_ylim(0, ymax)
         ax.grid(axis="y", alpha=0.25, linewidth=0.6)
         if col == 0:
-            ax.set_ylabel("Effective GB/s", fontsize=8)
-        ax.tick_params(axis="y", labelsize=7.5)
+            ax.set_ylabel("Effective GB/s", fontsize=9)
+        ax.tick_params(axis="y", labelsize=8.5)
 
-    axes[0].legend(loc="upper left", fontsize=6.6, frameon=False)
-    fig.subplots_adjust(left=0.055, right=0.997, bottom=0.25, top=0.91, wspace=0.20)
+    axes[0].legend(loc="upper left", fontsize=7.5, frameon=False)
+    fig.subplots_adjust(left=0.060, right=0.997, bottom=0.25, top=0.91, wspace=0.20)
     fig.savefig(output, dpi=220, facecolor="white")
     plt.close(fig)
 
@@ -109,9 +118,10 @@ def main() -> None:
     data = load_measurements(data_dir)
     for kernel, test_pass in PLOTS:
         for score_function in SCORE_FUNCTIONS:
-            output = output_dir / f"trace_{kernel}_{test_pass}_{score_function}.pdf"
-            plot_one(data, kernel, test_pass, score_function, output)
-            print(output)
+            for suffix, tokens_subset in (("low_tokens", TOKENS[:2]), ("high_tokens", TOKENS[2:])):
+                output = output_dir / f"trace_{kernel}_{test_pass}_{score_function}_{suffix}.pdf"
+                plot_one(data, kernel, test_pass, score_function, tokens_subset, output)
+                print(output)
 
 
 if __name__ == "__main__":

@@ -47,7 +47,7 @@
   \begin{frame}{Router Performance}{#1}
     \NvidiaSource{#4}
     \centering\vspace*{-.10in}
-    \includegraphics[width=.97\textwidth,height=2.80in,keepaspectratio]{#2}\par\vspace{-.02in}
+    \includegraphics[width=.97\textwidth,height=3.05in,keepaspectratio]{#2}\par\vspace{-.02in}
     \begin{minipage}{.94\textwidth}\scriptsize\raggedright\color{NvidiaCharcoal}#3\end{minipage}
   \end{frame}
 }
@@ -687,59 +687,114 @@ for (int k = lane_id; k < topk; k += 32) {
   {incremental router-optimization records; effective bandwidth, B300}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_topk_forward_softmax.pdf}
+  {Single B300 router benchmark: softmax; seven shapes; $T=4$K and $16$K}
+  {assets/generated/trace_topk_forward_softmax_low_tokens.pdf}
   {The final dense-int16 output checkpoint sustains the forward gain across the measured shapes;
-   the absolute effective bandwidth rises with enough tokens to amortize launch overhead.}
+   the first two token counts expose the launch-amortization regime.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_topk_forward_sigmoid.pdf}
-  {The same selection and metadata improvements transfer to sigmoid scoring, while its score
-   computation changes the absolute bandwidth level relative to softmax.}
+  {Single B300 router benchmark: softmax; seven shapes; $T=64$K and $256$K}
+  {assets/generated/trace_topk_forward_softmax_high_tokens.pdf}
+  {At steady-state token counts, the same checkpoint retains the gain while effective bandwidth
+   approaches its persistent-kernel operating range.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_topk_backward_raw_softmax.pdf}
-  {Selected-index routing eliminates redundant membership work in the top-$K$ backward path;
-   the resulting benefit is most visible at large expert counts.}
+  {Single B300 router benchmark: sigmoid; seven shapes; $T=4$K and $16$K}
+  {assets/generated/trace_topk_forward_sigmoid_low_tokens.pdf}
+  {The same selection and metadata improvements transfer to sigmoid scoring; its score arithmetic
+   changes the absolute bandwidth level relative to softmax.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_topk_backward_raw_sigmoid.pdf}
-  {Backward gains persist for sigmoid because the selected-index traversal removes the same
-   full-row routing-map scan, independent of the score function.}
+  {Single B300 router benchmark: sigmoid; seven shapes; $T=64$K and $256$K}
+  {assets/generated/trace_topk_forward_sigmoid_high_tokens.pdf}
+  {The sigmoid forward result follows the same trend at steady state, with its score function
+   setting the attainable effective bandwidth.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_forward_softmax.pdf}
-  {Auxiliary-loss forward shares the optimized loading and score-processing structure; gains
-   remain stable across the seven shape pairs as the token count grows.}
+  {Single B300 router benchmark: softmax backward; seven shapes; $T=4$K and $16$K}
+  {assets/generated/trace_topk_backward_raw_softmax_low_tokens.pdf}
+  {Selected-index routing eliminates redundant membership work in top-$K$ backward, with the
+   benefit most visible at large expert counts.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_forward_sigmoid.pdf}
-  {Sigmoid auxiliary-loss forward follows the same trend, with score-function arithmetic setting
-   the attainable effective bandwidth rather than changing the optimization direction.}
+  {Single B300 router benchmark: softmax backward; seven shapes; $T=64$K and $256$K}
+  {assets/generated/trace_topk_backward_raw_softmax_high_tokens.pdf}
+  {At steady state, selected-index traversal keeps the full-row routing-map scan out of the
+   backward path.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_backward_raw_softmax.pdf}
-  {The backward kernel benefits from the optimized per-row reductions and reduced shared-memory
-   pressure, particularly once the persistent kernel has sufficient work.}
+  {Single B300 router benchmark: sigmoid backward; seven shapes; $T=4$K and $16$K}
+  {assets/generated/trace_topk_backward_raw_sigmoid_low_tokens.pdf}
+  {Backward gains persist for sigmoid because selected-index traversal removes the same full-row
+   routing-map scan, independent of the score function.}
   {data/trace-back-comparisons}
 
 \NvidiaRouterTallPerformanceSlide
-  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_backward_raw_sigmoid.pdf}
-  {The sigmoid auxiliary-loss backward results show the same large-shape benefit while retaining
-   the complete score-function semantics.}
+  {Single B300 router benchmark: sigmoid backward; seven shapes; $T=64$K and $256$K}
+  {assets/generated/trace_topk_backward_raw_sigmoid_high_tokens.pdf}
+  {The steady-state sigmoid backward sweep retains the selected-index benefit across all measured
+   shapes.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: softmax auxiliary loss; $T=4$K and $16$K}
+  {assets/generated/trace_aux_loss_forward_softmax_low_tokens.pdf}
+  {Auxiliary-loss forward shares the optimized loading and score-processing structure across the
+   seven shape pairs.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: softmax auxiliary loss; $T=64$K and $256$K}
+  {assets/generated/trace_aux_loss_forward_softmax_high_tokens.pdf}
+  {The steady-state sweep retains the auxiliary-loss forward gain as the persistent kernel gains
+   sufficient work.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: sigmoid auxiliary loss; $T=4$K and $16$K}
+  {assets/generated/trace_aux_loss_forward_sigmoid_low_tokens.pdf}
+  {Sigmoid auxiliary-loss forward follows the same direction; score arithmetic sets the absolute
+   bandwidth level.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: sigmoid auxiliary loss; $T=64$K and $256$K}
+  {assets/generated/trace_aux_loss_forward_sigmoid_high_tokens.pdf}
+  {At steady state, the optimized score path sustains the gain across the complete shape sweep.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: softmax auxiliary backward; $T=4$K and $16$K}
+  {assets/generated/trace_aux_loss_backward_raw_softmax_low_tokens.pdf}
+  {The backward kernel benefits from optimized per-row reductions and reduced shared-memory
+   pressure.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: softmax auxiliary backward; $T=64$K and $256$K}
+  {assets/generated/trace_aux_loss_backward_raw_softmax_high_tokens.pdf}
+  {The steady-state sweep retains the large-shape benefit once the persistent kernel has enough
+   work.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: sigmoid auxiliary backward; $T=4$K and $16$K}
+  {assets/generated/trace_aux_loss_backward_raw_sigmoid_low_tokens.pdf}
+  {The sigmoid auxiliary backward sweep retains complete score-function semantics at low token
+   counts.}
+  {data/trace-back-comparisons}
+
+\NvidiaRouterTallPerformanceSlide
+  {Single B300 router benchmark: sigmoid auxiliary backward; $T=64$K and $256$K}
+  {assets/generated/trace_aux_loss_backward_raw_sigmoid_high_tokens.pdf}
+  {The steady-state results show the same large-shape benefit while retaining the complete score
+   function.}
   {data/trace-back-comparisons}
 
 \section{HybridEP Optimization}
@@ -815,17 +870,17 @@ while (mask) {
     \begin{column}{.42\textwidth}
       \noindent\NvidiaMiniMetric{489 GB/s}{permute}{117 $\rightarrow$ 489 payload-model GB/s}\hfill
       \NvidiaMiniMetric{351 GB/s}{unpermute}{173 $\rightarrow$ 351 payload-model GB/s}
-      \par\vspace{.05in}\noindent{\NvidiaSansMedium\color{NvidiaGreen}\fontsize{10}{12}\selectfont
+      \par\vspace{.025in}\noindent{\NvidiaSansMedium\color{NvidiaGreen}\fontsize{10}{12}\selectfont
       What the ballot removes}\par\vspace{.02in}
       {\fontsize{8}{9.3}\selectfont\setlength{\parskip}{0pt}\noindent
       The reference assigns 128 threads/token and tests all 32 local-expert slots. Only about
       4.5 are active, so 86\% of slot checks, route loads, and branches are unnecessary.\par}
-      \vspace{.035in}
+      \vspace{.015in}
       {\fontsize{7.5}{8.8}\selectfont\setlength{\parskip}{0pt}\noindent
       \textcolor{NvidiaGreen}{\NvidiaSansMedium Later upstream adoption.} Tong Liu's
       \href{https://github.com/deepseek-ai/DeepEP/pull/625}{\#625} independently used an almost
       identical warp-ballot selected-route traversal; it was adopted after this path.\par}
-      \vspace{.025in}
+      \vspace{.01in}
       {\fontsize{7.5}{8.8}\selectfont\setlength{\parskip}{0pt}\noindent
       \textcolor{NvidiaGreen}{\NvidiaSansMedium Scope.} At $H=512$, standalone unfused
       permute/unpermute outperforms fused. \texttt{unpermute\_kernel<32>} (\texttt{7ec3238})
@@ -908,9 +963,9 @@ while (mask) {
         \toprule
         Group & G2S/pipe & S2G/pipe & Throughput \\
         \midrule
-        1, 64 SMs & 64 & 8 & 265 GB/s \\
-        2, 32 SMs & 32 & 4 & 263 GB/s \\
-        4, 32 SMs & 16 & 2 & 133 GB/s \\
+        1 / 64 SMs & 64 & 8 & 265 GB/s \\
+        2 / 32 SMs & 32 & 4 & 263 GB/s \\
+        4 / 32 SMs & 16 & 2 & 133 GB/s \\
         \bottomrule
       \end{tabularx}\par}
       \vspace{.08in}
@@ -954,7 +1009,7 @@ while (mask) {
       \small 15\% barrier stall
     \end{column}
   \end{columns}
-  \vspace{.08in}
+  \vspace{.03in}
   {\NvidiaSansMedium\color{NvidiaGreen}Findings from NCU}\par
   {\fontsize{8.5}{10.2}\selectfont\setlength{\parskip}{0pt}\noindent
   Dispatch issues S2G writes and continues; its long-scoreboard stall is TMA/NVLink backpressure,
