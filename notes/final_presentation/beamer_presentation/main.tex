@@ -34,28 +34,28 @@
     \includegraphics[width=.97\textwidth,height=3.15in,keepaspectratio]{#3}
   \end{frame}
 }
-\newcommand{\NvidiaTocEntry}[2]{%
+\newcommand{\NvidiaTocEntry}[3]{%
   \ifnum\value{section}=#1\def\NvidiaTocColor{NvidiaGreen}\else\def\NvidiaTocColor{NvidiaGreen!20}\fi%
   \noindent\begin{tikzpicture}[baseline=(label.base)]
     \node[fill=\NvidiaTocColor,text=white,minimum width=.22in,minimum height=.22in,
-      inner sep=0pt,font=\scriptsize] (number) {#1};
+      inner sep=0pt,font=\scriptsize] (number) {\hyperlink{#3}{#1}};
     \node[right=.10in of number.east,anchor=west,text=\NvidiaTocColor,
-      font=\normalsize] (label) {#2};
+      font=\normalsize] (label) {\hyperlink{#3}{#2}};
   \end{tikzpicture}\par\vspace{.07in}%
 }
 \newcommand{\NvidiaSectionToc}[1]{%
   \begin{frame}{Presentation outline}{#1}
     \vspace{.04in}
     \ifnum\value{section}<8
-      \NvidiaTocEntry{1}{Introduction}
-      \NvidiaTocEntry{2}{Target Workload}
-      \NvidiaTocEntry{3}{Initial Analysis}
-      \NvidiaTocEntry{4}{Fused-Router Optimization}
-      \NvidiaTocEntry{5}{HybridEP Optimization}
-      \NvidiaTocEntry{6}{MCore Integration}
-      \NvidiaTocEntry{7}{End-to-End Results}
+      \NvidiaTocEntry{1}{Introduction}{section-introduction}
+      \NvidiaTocEntry{2}{Target Workload}{section-target-workload}
+      \NvidiaTocEntry{3}{Initial Analysis}{section-initial-analysis}
+      \NvidiaTocEntry{4}{Fused-Router Optimization}{section-router}
+      \NvidiaTocEntry{5}{HybridEP Optimization}{section-hybridep}
+      \NvidiaTocEntry{6}{MCore Integration}{section-mcore}
+      \NvidiaTocEntry{7}{End-to-End Results}{section-results}
     \else
-      \NvidiaTocEntry{8}{Appendix}
+      \NvidiaTocEntry{8}{Appendix}{section-appendix}
     \fi
   \end{frame}
 }
@@ -70,6 +70,7 @@
 \NvidiaSectionToc{Introduction}
 
 \begin{frame}{Sparser MoE Trends}{Sparser routing is one possible scaling direction, not a universal design}
+  \hypertarget{section-introduction}{}
   \NvidiaSource{\href{https://mistral.ai/news/mixtral-of-experts/}{Mistral};
     \href{https://github.com/deepseek-ai/DeepSeek-V3}{DeepSeek-V3};
     \href{https://research.nvidia.com/labs/nemotron/Nemotron-3-Ultra/}{Nemotron 3 Ultra};
@@ -161,7 +162,7 @@ for j in range(K):
 \end{frame}
 
 \section{Target Workload}
-\NvidiaTransitionSlide{Target\\Workload}
+\NvidiaTransitionSlide{section-target-workload}{Target Workload}
 \NvidiaSectionToc{Target Workload}
 
 \begin{frame}{Target Configuration}{The 2,304-expert test exposes costs that are not visible in the public 512-expert configuration}
@@ -196,7 +197,7 @@ for j in range(K):
 \end{frame}
 
 \section{Initial Analysis}
-\NvidiaTransitionSlide{Initial\\Analysis}
+\NvidiaTransitionSlide{section-initial-analysis}{Initial Analysis}
 \NvidiaSectionToc{Initial Analysis}
 
 \begin{frame}{Initial Profile}{A historical snapshot exposed the critical path}
@@ -257,7 +258,7 @@ cuda_graph.replay()
 \end{frame}
 
 \section{Fused-Router Optimization}
-\NvidiaTransitionSlide{Router\\Optimization}
+\NvidiaTransitionSlide{section-router}{Router Optimization}
 \NvidiaSectionToc{Fused-Router Optimization}
 
 \begin{frame}{Selection Complexity}{Large $E$ and large $K$ turn repeated selection into the router bottleneck}
@@ -726,7 +727,7 @@ for (int k = lane_id; k < topk; k += 32) {
   {data/trace-back-comparisons}
 
 \section{HybridEP Optimization}
-\NvidiaTransitionSlide{HybridEP\\Optimization}
+\NvidiaTransitionSlide{section-hybridep}{HybridEP Optimization}
 \NvidiaSectionToc{HybridEP Optimization}
 
 \begin{frame}{HybridEP Pipeline}{Sparse routing reduces metadata work, local work, and combine latency}
@@ -1011,7 +1012,7 @@ validate the selected tuple in the EP72 launch
 \end{frame}
 
 \section{MCore Integration}
-\NvidiaTransitionSlide{MCore\\Integration}
+\NvidiaTransitionSlide{section-mcore}{MCore Integration}
 \NvidiaSectionToc{MCore Integration}
 
 \begin{frame}[fragile]{Megatron Core}{Integration boundaries}
@@ -1046,7 +1047,7 @@ else:
 \end{frame}
 
 \section{End-to-End Results}
-\NvidiaTransitionSlide{End-to-End\\Results}
+\NvidiaTransitionSlide{section-results}{End-to-End Results}
 \NvidiaSectionToc{End-to-End Results}
 
 \NvidiaPlotSlide
@@ -1146,7 +1147,7 @@ else:
 
 \appendix
 \section{Appendix}
-\NvidiaTransitionSlide{Appendix}
+\NvidiaTransitionSlide{section-appendix}{Appendix}
 \NvidiaSectionToc{Appendix}
 
 \begin{frame}{Combine Sensitivity}{EP72: group 2 retains throughput with half the SMs}
@@ -1209,6 +1210,6 @@ else:
   \end{tabularx}
 \end{frame}
 
-\NvidiaTransitionSlide{Discussion}
+\NvidiaTransitionSlide{section-discussion}{Discussion}
 
 \end{document}

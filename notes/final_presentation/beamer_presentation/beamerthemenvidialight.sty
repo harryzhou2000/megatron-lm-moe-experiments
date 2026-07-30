@@ -137,12 +137,13 @@
 }
 
 % Template-derived transition layout.
-\newcommand{\NvidiaTransitionSlide}[1]{%
+\newcommand{\NvidiaTransitionSlide}[2]{%
   \begin{frame}[plain]
+    \hypertarget{#1}{}
     \begin{tikzpicture}[remember picture,overlay]
       \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{assets/nvidia-transition-background.jpg}};
-      \node[anchor=north west,text=NvidiaBlack,text width=.48\paperwidth,align=left]
-        at ([xshift=3.05in,yshift=-.20in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{22}{25}\selectfont #1};
+      \node[anchor=north west,text=NvidiaBlack,text width=.56\paperwidth,align=left]
+        at ([xshift=3.05in,yshift=-.20in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{21}{24}\selectfont #2};
     \end{tikzpicture}
   \end{frame}%
 }
