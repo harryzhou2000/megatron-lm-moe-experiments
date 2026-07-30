@@ -162,7 +162,7 @@ def _correctness_passes(test_passes: List[str]) -> List[str]:
 def _resolve_score_fns(args, sweep: Dict) -> List[str]:
     """Resolve the score function list from CLI / sweep grid."""
     if args.score_function is not None:
-        return [args.score_function]
+        return args.score_function
     return sweep["score_functions"]
 
 
@@ -177,6 +177,21 @@ def _resolve_group_topks(args, sweep: Dict) -> List[int]:
     return group_topks
 
 
+def _parse_router_shape(value: str) -> Tuple[int, int]:
+    """Parse a paired ``num_experts/topk`` benchmark shape."""
+    try:
+        num_experts, topk = map(int, value.split("/"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid router shape '{value}'; expected num_experts/topk"
+        ) from exc
+    if num_experts <= 0 or topk <= 0 or topk > num_experts:
+        raise argparse.ArgumentTypeError(
+            f"Invalid router shape '{value}'; require 0 < topk <= num_experts"
+        )
+    return num_experts, topk
+
+
 def _resolve_input_types(args, sweep: Dict) -> List[Optional[str]]:
     """Resolve input types from CLI / sweep grid."""
     return _resolve(
@@ -188,15 +203,16 @@ def _resolve_input_types(args, sweep: Dict) -> List[Optional[str]]:
 def _build_topk_configs(args, sweep: Dict) -> List[Dict]:
     """Build the cross-product of topk configs, pinning user-specified dimensions."""
     tokens = _resolve(args.num_tokens, sweep["tokens"])
-    experts = _resolve(args.num_experts, sweep["experts"])
-    topks = _resolve(args.topk, sweep["topk"])
+    shapes = args.router_shape or list(
+        itertools.product(_resolve(args.num_experts, sweep["experts"]), _resolve(args.topk, sweep["topk"]))
+    )
     score_fns = _resolve_score_fns(args, sweep)
     group_topks = _resolve_group_topks(args, sweep)
     input_types = _resolve_input_types(args, sweep)
 
     configs: List[Dict] = []
-    for sf_name, nt, ne, tk, grp, inp in itertools.product(
-        score_fns, tokens, experts, topks, group_topks, input_types,
+    for sf_name, nt, (ne, tk), grp, inp in itertools.product(
+        score_fns, tokens, shapes, group_topks, input_types,
     ):
         if tk > ne:
             continue
@@ -221,14 +237,15 @@ def _build_topk_configs(args, sweep: Dict) -> List[Dict]:
 def _build_aux_loss_configs(args, sweep: Dict) -> List[Dict]:
     """Build the cross-product of aux_loss configs, pinning user-specified dimensions."""
     tokens = _resolve(args.num_tokens, sweep["tokens"])
-    experts = _resolve(args.num_experts, sweep["experts"])
-    topks = _resolve(args.topk, sweep["topk"])
+    shapes = args.router_shape or list(
+        itertools.product(_resolve(args.num_experts, sweep["experts"]), _resolve(args.topk, sweep["topk"]))
+    )
     sf_kernels = _dedup_aux_loss_score_functions(_resolve_score_fns(args, sweep))
     input_types = _resolve_input_types(args, sweep)
 
     configs: List[Dict] = []
-    for sf_kernel, nt, ne, tk, inp in itertools.product(
-        sf_kernels, tokens, experts, topks, input_types,
+    for sf_kernel, nt, (ne, tk), inp in itertools.product(
+        sf_kernels, tokens, shapes, input_types,
     ):
         if tk > ne:
             continue
@@ -351,6 +368,19 @@ def _raw_fused_topk_fwd_supports_dense_output() -> bool:
 
 
 @lru_cache(maxsize=None)
+def _raw_fused_topk_fwd_supports_routing_map_format() -> bool:
+    """Return whether the raw TE fwd binding accepts a routing-map format."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_topk_with_score_function_fwd, "routing_map_format"
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=None)
 def _raw_fused_topk_bwd_supports_dense_output() -> bool:
     """Return whether the raw TE bwd binding accepts dense top-k indices."""
     try:
@@ -358,6 +388,45 @@ def _raw_fused_topk_bwd_supports_dense_output() -> bool:
 
         return _callable_supports_parameter(
             tex.fused_topk_with_score_function_bwd, "use_dense_indices"
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=None)
+def _raw_fused_topk_bwd_supports_routing_map_format() -> bool:
+    """Return whether the raw TE bwd binding accepts a routing-map format."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_topk_with_score_function_bwd, "routing_map_format"
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=None)
+def _raw_fused_topk_bwd_requires_dimensions() -> bool:
+    """Return whether the raw TE bwd binding requires leading dimensions."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_topk_with_score_function_bwd, "num_tokens"
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=None)
+def _raw_aux_loss_bwd_requires_dimensions() -> bool:
+    """Return whether the raw aux-score bwd binding requires leading dimensions."""
+    try:
+        import transformer_engine_torch as tex
+
+        return _callable_supports_parameter(
+            tex.fused_score_for_moe_aux_loss_bwd, "num_tokens"
         )
     except (ImportError, AttributeError):
         return False
@@ -405,7 +474,6 @@ def _raw_fused_topk_fwd(
     """Call raw fused_topk fwd with a signature compatible with upstream and dense TE."""
     import transformer_engine_torch as tex
 
-    routing_map_format = 0
     args = (
         logits,
         topk,
@@ -415,8 +483,9 @@ def _raw_fused_topk_fwd(
         scaling_factor,
         score_function,
         expert_bias,
-        routing_map_format,
     )
+    if _raw_fused_topk_fwd_supports_routing_map_format():
+        args = (*args, 0)
     if topk_indices is not None:
         if not _raw_fused_topk_fwd_supports_dense_output():
             raise RuntimeError("Installed TE raw fused_topk fwd does not accept topk_indices")
@@ -1344,12 +1413,10 @@ def _benchmark_aux_loss_one(
         grad_logits = torch.empty(num_tokens, num_experts, dtype=dtype, device="cuda")
 
         def _fused_aux_bwd():
-            tex.fused_score_for_moe_aux_loss_bwd(
-                num_tokens=num_tokens, num_experts=num_experts,
-                intermediate_output=intermediate_output,
-                grad_scores=grad_scores, grad_logits=grad_logits,
-                topk=topk, score_function=score_function,
-            )
+            args = (intermediate_output, grad_scores, grad_logits, topk, score_function)
+            if _raw_aux_loss_bwd_requires_dimensions():
+                args = (num_tokens, num_experts, *args)
+            tex.fused_score_for_moe_aux_loss_bwd(*args)
 
         fused_ms = _time_kernel_only(_fused_aux_bwd, warmup, iters)
 
@@ -1541,7 +1608,6 @@ def _topk_backward_raw_fused(
     """Call the fused backward kernel directly (no autograd overhead)."""
     import transformer_engine_torch as tex
 
-    routing_map_format = 0
     args = (
         routing_map,
         intermediate_output,
@@ -1552,14 +1618,16 @@ def _topk_backward_raw_fused(
         scaling_factor,
         score_function,
     )
+    if _raw_fused_topk_bwd_requires_dimensions():
+        args = (routing_map.size(0), routing_map.size(1), *args)
     if use_dense_indices:
         if not _raw_fused_topk_bwd_supports_dense_output():
             raise RuntimeError("Installed TE raw fused_topk bwd does not accept dense indices")
-        args = (*args, use_dense_indices, routing_map_format)
+        args = (*args, use_dense_indices)
     elif _raw_fused_topk_bwd_supports_dense_output():
-        args = (*args, use_dense_indices, routing_map_format)
-    else:
-        args = (*args, routing_map_format)
+        args = (*args, use_dense_indices)
+    if _raw_fused_topk_bwd_supports_routing_map_format():
+        args = (*args, 0)
     tex.fused_topk_with_score_function_bwd(*args)
 
 
@@ -1866,13 +1934,21 @@ def main():
     )
 
     # Shape / kernel options — omit any to sweep that dimension.
-    parser.add_argument("--num-tokens", type=int, default=None,
+    parser.add_argument("--num-tokens", nargs="+", type=int, default=None,
                         help="Number of tokens (omit to sweep)")
     parser.add_argument("--num-experts", type=int, default=None,
                         help="Number of experts (omit to sweep)")
     parser.add_argument("--topk", type=int, default=None,
                         help="Top-k value (omit to sweep)")
-    parser.add_argument("--score-function", choices=ALL_SCORE_FUNCTIONS,
+    parser.add_argument(
+        "--router-shape",
+        nargs="+",
+        type=_parse_router_shape,
+        default=None,
+        metavar="NUM_EXPERTS/TOPK",
+        help="Paired router shapes; avoids the --num-experts/--topk cross-product",
+    )
+    parser.add_argument("--score-function", nargs="+", choices=ALL_SCORE_FUNCTIONS,
                         default=None,
                         help="Score function (omit to sweep all)")
     parser.add_argument("--num-groups", type=int, default=None,
@@ -1925,6 +2001,9 @@ def main():
                         help="Write benchmark results to a CSV file")
 
     args = parser.parse_args()
+
+    if args.router_shape is not None and (args.num_experts is not None or args.topk is not None):
+        parser.error("--router-shape cannot be combined with --num-experts or --topk")
 
     # Resolve list defaults for --kernel and --pass.
     if args.kernel is None:
