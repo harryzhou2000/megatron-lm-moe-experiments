@@ -174,6 +174,25 @@
   \end{beamercolorbox}%
 }
 
+% Source skeletons and algorithm pseudocode use distinct, deliberately compact
+% lexers.  This preserves CUDA semantics without coloring pseudocode as C++.
+\lstdefinelanguage{NvidiaCUDA}[]{C++}{
+  morekeywords=[1]{__device__,__global__,__host__,__shared__,__forceinline__,__launch_bounds__,
+    constexpr,decltype,static_cast,auto,typename,template},
+  morekeywords=[2]{__syncthreads,__syncwarp,__shfl_sync,__shfl_xor_sync,__ballot_sync,__ffs,__popc},
+  keywordstyle=[1]\color{NvidiaBlue},
+  keywordstyle=[2]\color{NvidiaPurple}
+}
+\lstdefinelanguage{NvidiaPseudo}{
+  morekeywords={for,in,range,if,else,elif,while,and,or,not,until,select,validate,return,break,continue},
+  morekeywords=[2]{route,dispatch,grouped_mlp,combine,cuda_graph,router,send,router_backward,time,
+    verify_correctness,owner_rank,process_active_expert,fused_router,hybrid_ep,compatibility_bool_route},
+  keywordstyle=\color{NvidiaBlue},
+  keywordstyle=[2]\color{NvidiaPurple},
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]"
+}
 \lstdefinestyle{nvidiacode}{
   basicstyle=\ttfamily\fontsize{8.5}{10.5}\selectfont,
   backgroundcolor=\color{NvidiaLightGray},
@@ -189,11 +208,12 @@
   breaklines=true,
   breakatwhitespace=false,
   keepspaces=true,
+  numberstyle=\color{NvidiaGray},
   keywordstyle=\color{NvidiaBlue},
   commentstyle=\color{NvidiaGray},
   stringstyle=\color{NvidiaPurple}
 }
-\lstnewenvironment{NvidiaCode}[1][]{\lstset{style=nvidiacode,#1}}{}
+\lstnewenvironment{NvidiaCode}[1][]{\lstset{style=nvidiacode,language=NvidiaPseudo,#1}}{}
 
 % A light progression borrowed from the template's horizontal progression page.
 % Use it for a single directional story; prefer a real diagram for branching logic.

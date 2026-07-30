@@ -274,7 +274,7 @@ cuda_graph.replay()
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.49\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.8}{9.2}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaPseudo,basicstyle=\ttfamily\fontsize{7.8}{9.2}\selectfont]
 ordered = float_to_ordered_uint(scores)
 prefix, mask = 0, 0
 rank = topk
@@ -308,7 +308,7 @@ gather ties in index order until topk
   \NvidiaSource{\texttt{TE/transformer\_engine/common/fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.58\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
 constexpr int kPasses = 8;
 unsigned prefix = 0, mask = 0;
 for (int pass = kPasses - 1; pass >= 0; --pass) {
@@ -371,7 +371,7 @@ for (int pass = kPasses - 1; pass >= 0; --pass) {
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.58\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
 if constexpr (ScoreFunc == kSigmoid) {
   for (int i = lane_id; i < E; i += 32) {
     float value = sigmoid(raw_logits[i]);
@@ -403,7 +403,7 @@ if constexpr (ScoreFunc == kSigmoid) {
     \texttt{TE/.../fused\_router/async\_loader.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.56\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
 // tile n+1 starts before tile n selects
 loader.start_load(next_logits, E, lane_id);
 
@@ -431,7 +431,7 @@ cp_async_commit();
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.57\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
 // 16 counters in 4 packed u32 values
 unsigned packed[4] = {};
 int bucket = (u >> digit_pos) & 0xf;
@@ -458,7 +458,7 @@ unsigned total = warp_allreduce_sum(count);
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.55\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
 template <typename T, TopkFuncType TopkFunc, int ScoreFunc>
 __global__ void router_forward(...);
 
@@ -487,7 +487,7 @@ else if constexpr (ScoreFunc == kSqrtsoftplus)
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.58\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.6}{7.8}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.6}{7.8}\selectfont]
 bool use_radix = topk >= radix_threshold && E <= kMaxExperts;
 
 if (!use_radix)
@@ -542,7 +542,7 @@ else
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.57\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
 for (int i = lane_id; i < topk; i += 32) {
   int expert = topk_indices[i];
   if (indices_out)
@@ -570,7 +570,7 @@ if constexpr (IndexType == int16_t)
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.57\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
 const IndexType* ids = topk_indices + token * topk;
 zero(grad_logits + pos, E);
 
@@ -753,7 +753,7 @@ grad_logits = router_backward(ids, weights, grad)
   \LocalSource{notes/permute\_unpermute\_optimization.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.54\textwidth}
-      \begin{NvidiaCode}[language=C++]
+      \begin{NvidiaCode}[language=NvidiaCUDA]
 active = route_map[token * E_local + lane] > 0;
 mask = __ballot_sync(FULL_MASK, active);
 
@@ -986,7 +986,7 @@ validate the selected tuple in the EP72 launch
     \end{column}
     \begin{column}{.48\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}\fontsize{13}{16}\selectfont Delivered plumbing}\NvidiaTightRule{.7pt}\vspace{.05in}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.5}{9}\selectfont]
+      \begin{NvidiaCode}[language=NvidiaPseudo,basicstyle=\ttfamily\fontsize{7.5}{9}\selectfont]
 if te.has_dense_route_output() and \
    dispatcher.accepts_dense_route():
     route = int16[T, K]
