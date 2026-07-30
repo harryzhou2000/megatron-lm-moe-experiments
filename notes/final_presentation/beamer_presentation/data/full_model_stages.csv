@@ -1,0 +1,11 @@
+model,stage,median_tflops
+2304E / EP72,No tune / no radix,127.2
+2304E / EP72,Tuned HybridEP,137.1
+2304E / EP72,+ Router #2821,219.9
+2304E / EP72,+ Router #3012,230.8
+2304E / EP72,Full sparse stack,419.7
+2048E / EP64,No tune / no radix,162.2
+2048E / EP64,Tuned HybridEP,178.3
+2048E / EP64,+ Router #2821,249.9
+2048E / EP64,+ Router #3012,261.4
+2048E / EP64,Full sparse stack,435.1

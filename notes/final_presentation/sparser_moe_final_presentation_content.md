@@ -5,6 +5,11 @@
 This note organizes the technical story for a final presentation. It is intentionally a
 content narrative rather than a slide-layout specification.
 
+The working Beamer implementation is in
+`notes/final_presentation/beamer_presentation/`. Its `BRIEF.md` records the requested
+deck structure and evidence constraints, while `main.tex`, `data/`, and
+`scripts/plot_results.py` contain the reproducible slide implementation.
+
 The central thesis is:
 
 > Sparser MoE changes the performance problem. With thousands of experts, a large top-k,
