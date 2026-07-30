@@ -97,68 +97,42 @@
   \end{NvidiaEvidence}
 \end{frame}
 
-\begin{frame}[fragile]{MoE Execution}{Only selected experts execute, but every token still routes}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.55\textwidth}
-      \begin{tikzpicture}[
-        box/.style={draw=NvidiaRuleGray,rounded corners=2pt,fill=NvidiaLightGray,
-                    minimum height=.42in,text width=.76in,align=center,font=\scriptsize},
-        arrow/.style={-{Latex[length=1.7mm]},line width=.9pt,NvidiaGreen},
-        node distance=.10in
-      ]
-        \node[box] (x) {token\\hidden state};
-        \node[box,right=of x] (r) {router\\scores $[E]$};
-        \node[box,right=of r] (k) {top-$k$\\IDs + weights};
-        \node[box,below=.52in of k] (e) {selected\\expert MLPs};
-        \node[box,left=of e] (c) {weighted\\combine};
-        \draw[arrow] (x) -- (r);
-        \draw[arrow] (r) -- (k);
-        \draw[arrow] (k) -- node[right,font=\scriptsize]{dispatch} (e);
-        \draw[arrow] (e) -- (c);
-        \draw[arrow] (c.west) -- ++(-.32in,0);
-      \end{tikzpicture}
-    \end{column}
-    \begin{column}{.41\textwidth}
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.6}{9.0}\selectfont]
-scores = router(x)          # E scores
-ids, weights = topk(scores, K)
-
-y = 0
-for j in range(K):
-    y += weights[j] * expert[ids[j]](x)
-      \end{NvidiaCode}
-      \begin{NvidiaEvidence}{Non-MLP work}
-        Sparse compute reduces MLP FLOPs but retains owner selection, token exchange,
-        probability preservation, and reverse-path work.
-      \end{NvidiaEvidence}
-    \end{column}
-  \end{columns}
+\begin{frame}{MoE Execution}{MCore carries activations and routing metadata through the sparse MLP}
+  \NvidiaSource{\texttt{MLM/megatron/core/transformer/transformer\_layer.py};
+    \texttt{MLM/megatron/core/transformer/moe/moe\_layer.py}}
+  \centering
+  \includegraphics[width=.98\textwidth,height=2.55in,keepaspectratio]{assets/generated/moe_execution_timeline.pdf}
+  \vspace{.03in}
+  \small\textcolor{NvidiaGreen}{\NvidiaSansMedium Optimization target.}\quad
+  Sparse performance depends on router work, metadata transformation, token exchange,
+  expert kernels, and weighted recombination.
 \end{frame}
 
-\begin{frame}{LatentMoE Cost Model}{Router and communication costs decrease more slowly than expert computation}
+\begin{frame}{LatentMoE Cost Model}{Latent representations reduce exchange payload, not expert computation}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Conventional experts}\par
+      {\NvidiaSansMedium Expert computation}\par
       \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.10in}
       \[
-        \text{expert work} \propto T \times K \times H \times H_{\mathrm{ffn}}
+        \mathrm{FLOPs}_{\mathrm{expert}} \propto T K H_{\mathrm{latent}} H_{\mathrm{expert}}
       \]
-      \small Large expert GEMMs amortize routing, launch, and metadata overhead.
+      \small Latent MoE does not remove the per-route expert GEMM: every selected route still
+      executes its expert MLP. Without latent MoE, replace $H_{\mathrm{latent}}$ with $H$.
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Latent experts}\par
+      {\NvidiaSansMedium Token exchange}\par
       \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.10in}
       \[
-        H_{\mathrm{ffn}} \downarrow \quad\Rightarrow\quad \text{expert time} \downarrow
+        \text{payload} \propto T K H_{\mathrm{latent}}
       \]
-      \small Router remains $T\times E$; ownership and token exchange remain $T\times K$.
+      \small Router score projection costs $\mathcal{O}(T H E)$ and top-$k$ selection adds
+      $\mathcal{O}(T E)$ metadata work. Latent MoE narrows the exchanged payload when
+      $H_{\mathrm{latent}} \ll H$; without it, replace $H_{\mathrm{latent}}$ with $H$.
     \end{column}
   \end{columns}
-  \vspace{.15in}
-  \begin{NvidiaEvidence}{Sparse-path budget}
-    The relevant optimization unit is the complete sparse path: selection, compact metadata,
-    dispatch preprocessing, communication, expert compute, and combine.
-  \end{NvidiaEvidence}
+  \vspace{.04in}
+  \small\textcolor{NvidiaGreen}{\NvidiaSansMedium Sparse-path budget.}\quad
+  Selection, metadata transformation, communication, expert compute, and combine remain coupled.
 \end{frame}
 
 \section{Target Workload}
