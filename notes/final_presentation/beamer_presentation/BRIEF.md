@@ -61,6 +61,8 @@ hardware, benchmark scope, warmup, and metric.
 ## Content constraints
 
 - Keep one claim per slide and use takeaway-style titles.
+- Use a technical, formal register; define abbreviations at first use and keep
+  performance claims explicitly scoped to their measured configuration.
 - Use top-level Beamer sections and insert a current-section roadmap after each
   section transition, including the appendix.
 - Distinguish isolated kernel results, staged stack comparisons, MoE-only

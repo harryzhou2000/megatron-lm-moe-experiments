@@ -26,7 +26,7 @@
   \end{frame}
 }
 \newcommand{\NvidiaSectionToc}[1]{%
-  \begin{frame}{Roadmap}{#1}
+  \begin{frame}{Presentation outline}{#1}
     \vspace{.12in}
     \tableofcontents[currentsection,hideallsubsections]
   \end{frame}
@@ -39,10 +39,9 @@
 \end{frame}}
 
 \section{Context and target workload}
-\NvidiaTransitionSlide{Why sparser MoE changes\\the performance bottleneck}
 \NvidiaSectionToc{Context and target workload}
 
-\begin{frame}{Open MoEs are getting wider and more selective}{One visible direction is more capacity with a smaller active fraction}
+\begin{frame}{Open MoE architectures increasingly use wider, more selective routing}{Representative models increase capacity while limiting the active expert set}
   \NvidiaSource{\href{https://mistral.ai/news/mixtral-of-experts/}{Mistral};
     \href{https://github.com/deepseek-ai/DeepSeek-V3}{DeepSeek-V3};
     \href{https://github.com/MoonshotAI/Kimi-K2}{Kimi K2};
@@ -59,9 +58,10 @@
     \bottomrule
   \end{tabularx}
   \vspace{.12in}
-  \begin{NvidiaEvidence}{Why this matters for systems}
+  \begin{NvidiaEvidence}{Systems implication}
     Qwen3-Next also narrows each routed expert to a 512-wide MoE intermediate.
-    Expert GEMMs become cheaper while router rows, route metadata, and ownership exchange remain wide.
+    Narrower experts reduce GEMM cost, whereas router rows, route metadata, and ownership
+    exchange retain their width.
   \end{NvidiaEvidence}
 \end{frame}
 
@@ -95,15 +95,15 @@ y = 0
 for j in range(K):
     y += weights[j] * expert[ids[j]](x)
       \end{NvidiaCode}
-      \begin{NvidiaEvidence}{The hidden systems cost}
-        Sparse compute reduces MLP FLOPs, not the need to select owners, exchange tokens,
-        preserve weights, and reverse the path in backward.
+      \begin{NvidiaEvidence}{System overhead remains}
+        Sparse compute reduces MLP FLOPs but does not eliminate owner selection, token exchange,
+        weight preservation, or reverse-path work in backward.
       \end{NvidiaEvidence}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}{Latent experts flip the bottleneck budget}{Router and communication work shrink more slowly than expert compute}
+\begin{frame}{Latent experts shift the performance budget}{Router and communication costs decrease more slowly than expert computation}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
       \begin{NvidiaCard}{Conventional wider experts}
@@ -123,13 +123,13 @@ for j in range(K):
     \end{column}
   \end{columns}
   \vspace{.15in}
-  \begin{NvidiaEvidence}{Performance thesis}
-    The right unit of optimization is the entire sparse path: selection, compact metadata,
+  \begin{NvidiaEvidence}{Optimization objective}
+    The relevant optimization unit is the complete sparse path: selection, compact metadata,
     dispatch preprocessing, communication, expert compute, and combine.
   \end{NvidiaEvidence}
 \end{frame}
 
-\begin{frame}{The stress model keeps Qwen3-Next's latent experts and widens routing}{A 2,304-expert test exposes costs hidden by the public 512-expert shape}
+\begin{frame}{The target configuration preserves latent experts and expands routing width}{The 2,304-expert test exposes costs that are not visible in the public 512-expert configuration}
   \NvidiaSource{\href{https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct/blob/main/config.json}{Qwen3-Next config};
     local recipe: \texttt{qwen3\_next\_sparser.yaml}}
   \begin{columns}[T,onlytextwidth]
@@ -150,8 +150,8 @@ for j in range(K):
       \end{tabularx}
     \end{column}
     \begin{column}{.37\textwidth}
-      \noindent\NvidiaMiniMetric{4.5$\times$}{more router scores}{512 $\rightarrow$ 2,304 experts}\hfill
-      \NvidiaMiniMetric{3.6$\times$}{more selected routes}{10 $\rightarrow$ 36}
+      \noindent\NvidiaMiniMetric{4.5$\times$}{router-score count}{512 $\rightarrow$ 2,304 experts}\hfill
+      \NvidiaMiniMetric{3.6$\times$}{selected-route count}{10 $\rightarrow$ 36}
       \vspace{.12in}
       \begin{NvidiaCard}{Main performance configuration}
         TP1 / PP1 / EP72, MBS 3, GBS 864, MXFP8, 1F1B, full-iteration CUDA graph.
@@ -160,7 +160,7 @@ for j in range(K):
   \end{columns}
 \end{frame}
 
-\begin{frame}{The first timeline said data movement had overtaken expert compute}{A historical snapshot made the new critical path visible}
+\begin{frame}{Initial profiling identified data movement as the dominant cost}{A historical snapshot exposed the critical path}
   \NvidiaSource{Historical profile snapshot; final presentation content note}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.55\textwidth}
@@ -177,7 +177,7 @@ for j in range(K):
       \end{tabularx}
     \end{column}
     \begin{column}{.40\textwidth}
-      \begin{NvidiaCard}{Three root causes}
+      \begin{NvidiaCard}{Principal bottlenecks}
         \begin{enumerate}
           \item CPU launch overhead from many small kernels.
           \item Fused-router degradation at large $E$ and $K$.
@@ -187,11 +187,11 @@ for j in range(K):
     \end{column}
   \end{columns}
   \vspace{.04in}
-  {\small\color{NvidiaGreen}\NvidiaSansMedium Remove launch overhead first; then
-  profile the replay-stable GPU path.}
+  {\small\color{NvidiaGreen}\NvidiaSansMedium Eliminate launch overhead before analyzing
+  the replay-stable GPU critical path.}
 \end{frame}
 
-\begin{frame}[fragile]{First remove CPU launch overhead from the measurement}{Make one iteration replayable, then optimize the kernels that remain}
+\begin{frame}[fragile]{Eliminate CPU launch overhead before kernel analysis}{Make one iteration replayable, then optimize the remaining GPU bottlenecks}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.48\textwidth}
       \begin{NvidiaCode}
@@ -218,14 +218,14 @@ cuda_graph.replay()
 \end{frame}
 
 \section{Fused-router optimization}
-\NvidiaTransitionSlide{1. Fix selection: from\\repeated scans to a\\router kernel family}
+\NvidiaTransitionSlide{1. Fused-router\\optimization}
 \NvidiaSectionToc{Fused-router optimization}
 
-\begin{frame}[fragile]{The original top-$k$ path repeatedly rescanned a 2,304-wide row}{Radix selection changes the algorithm from $K$-dependent scans to fixed passes}
+\begin{frame}[fragile]{Baseline top-$k$ selection repeatedly scans a 2,304-element row}{Radix selection replaces $K$-dependent scans with a fixed-pass algorithm}
   \NvidiaSource{Matched B300 trace-back benchmark; TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{\#2821}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Naive selection}\par
+      {\NvidiaSansMedium Baseline selection}\par
       \begin{NvidiaCode}
 for slot in range(K):
     best = -inf
@@ -233,7 +233,7 @@ for slot in range(K):
         if expert not already_selected:
             best = max(best, score[expert])
       \end{NvidiaCode}
-      \centering {\color{NvidiaGray}$\mathcal{O}(E\times K)$-like repeated work}
+      \centering {\color{NvidiaGray}Repeated $E\times K$-like work}
     \end{column}
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium Radix selection}\par
@@ -255,18 +255,18 @@ gather_values_at_or_above(prefix)
 \end{frame}
 
 \NvidiaPlotSlide
-  {Three router stages solved different scaling failures}
+  {Router stages address distinct scaling limitations}
   {Matched B300 trace-back: 65,536 tokens, 2,304 experts, top-$k=36$, softmax}
   {assets/generated/router_pr_progression.pdf}
   {data/trace-back-comparisons; TE PRs \#2821, \#3012, \#3129}
 
 \NvidiaPlotSlide
-  {P3R extended the gain into forward and backward}
+  {P3R increases effective bandwidth in forward and backward}
   {Incremental 8,192-token result for the target 2,304/36 shape}
   {assets/generated/router_p3r_stages.pdf}
   {data/router\_fix\_p3R; effective bandwidth, B300}
 
-\begin{frame}[fragile]{The optimized router overlaps loads and removes backward scratch}{The win is a coordinated kernel design, not a single launch knob}
+\begin{frame}[fragile]{The optimized router overlaps loads and removes backward scratch}{Performance derives from coordinated kernel design rather than a single launch parameter}
   \NvidiaSource{\href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{TE PR \#3012};
     fused-router optimization note}
   \begin{columns}[T,onlytextwidth]
@@ -295,7 +295,7 @@ for tile in token_tiles:
   \end{columns}
 \end{frame}
 
-\begin{frame}{B300 roofs show why the router is not a pure bandwidth kernel}{Two deliberately optimistic floors bracket the measured 254.5 $\mu$s result}
+\begin{frame}{B300 reference bounds show that the router is not purely bandwidth-bound}{Two optimistic lower bounds bracket the measured 254.5 $\mu$s result}
   \NvidiaSource{\href{https://www.nvidia.com/en-us/data-center/hgx/}{NVIDIA HGX B300 specs};
     \texttt{TE/.../fused\_router/utils.h}; P3R merged-head benchmark}
   \begin{columns}[T,onlytextwidth]
@@ -311,7 +311,7 @@ for tile in token_tiles:
       {\scriptsize\color{NvidiaGray}This counts tensor bytes, not cache-line or instruction overhead.}
     \end{column}
     \begin{column}{.47\textwidth}
-      \begin{NvidiaCard}{CUDA-core issue floor}
+      \begin{NvidiaCard}{Compute-issue lower bound}
         Eight radix passes touch 151M scores:
         \[
           8\!\times\!8192\!\times\!2304=151\text{M}.
@@ -326,12 +326,12 @@ for tile in token_tiles:
   \vspace{.10in}
 \end{frame}
 
-\begin{frame}[fragile]{Compact dense routing removes a 32$\times$ metadata expansion}{Represent selected IDs directly instead of materializing a bool for every expert}
+\begin{frame}[fragile]{Compact dense routing eliminates a 32$\times$ metadata expansion}{Represent selected IDs directly instead of materializing a bool for every expert}
   \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
     \texttt{notes/dense\_routing\_rebase\_design.md}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.48\textwidth}
-      \begin{NvidiaCard}{Same choices, smaller state}
+      \begin{NvidiaCard}{Equivalent routing state, reduced representation}
         \begin{tabularx}{\linewidth}{@{}X r@{}}
           Bool $[T,E]$ & 2,304 B/token \\
           int16 $[T,K]$ & 72 B/token
@@ -361,10 +361,10 @@ hybrid_ep.dispatch(
 \end{frame}
 
 \section{HybridEP sparse exchange}
-\NvidiaTransitionSlide{2. Exchange only\\useful sparse state}
+\NvidiaTransitionSlide{2. HybridEP\\sparse exchange}
 \NvidiaSectionToc{HybridEP sparse exchange}
 
-\begin{frame}{HybridEP is a pipeline of metadata, remote writes, and remote reads}{Each stage has a different sparsity and latency failure mode}
+\begin{frame}{HybridEP comprises metadata, remote-write, and remote-read stages}{Each stage has distinct sparsity and latency constraints}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \centering
   \resizebox{.94\textwidth}{!}{\begin{tikzpicture}[
@@ -386,24 +386,24 @@ hybrid_ep.dispatch(
   \vspace{.14in}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{Metadata}
+      \begin{NvidiaCard}{Metadata handling}
         Avoid bool $[T,E]$ and repeated membership work.
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{Sparse local work}
+      \begin{NvidiaCard}{Sparse local execution}
         Skip inactive expert slots in permute and unpermute.
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{Pipeline}
+      \begin{NvidiaCard}{Pipeline parameters}
         Tune pull depth, grouping, and reduction batch together.
       \end{NvidiaCard}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Probability optimization means slice transport, not delete weights}{Selected probabilities remain required for weighted activation and gradients}
+\begin{frame}[fragile]{Probability transport is sliced, not eliminated}{Selected probabilities remain required for weighted activations and gradients}
   \LocalSource{notes/hybrid\_ep\_rebased\_bw\_results.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.52\textwidth}
@@ -420,10 +420,10 @@ grad_logits = router_backward(ids, weights, grad)
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.43\textwidth}
-      \noindent\NvidiaMiniMetric{103.0 $\mu$s}{dispatch with probs}{controlled B300 NVL8}\hfill
+      \noindent\NvidiaMiniMetric{103.0 $\mu$s}{dispatch with probability payload}{controlled B300 NVL8}\hfill
       \NvidiaMiniMetric{94.4 $\mu$s}{without prob payload}{+9\%}
       \vspace{.12in}
-      \noindent\NvidiaMiniMetric{249.4 $\mu$s}{combine with probs}{pull + reduce}\hfill
+      \noindent\NvidiaMiniMetric{249.4 $\mu$s}{combine with probability payload}{pull + reduce}\hfill
       \NvidiaMiniMetric{210.0 $\mu$s}{without prob payload}{+19\%}
     \end{column}
   \end{columns}
@@ -432,7 +432,7 @@ grad_logits = router_backward(ids, weights, grad)
   training still preserves selected weights and their backward dependencies.}
 \end{frame}
 
-\begin{frame}[fragile]{Ballot iteration visits active experts instead of all 32 slots}{The target has about 4.5 active local experts per token, so 86\% of slots are empty}
+\begin{frame}[fragile]{Ballot-based iteration processes only active local experts}{The target has approximately 4.5 active local experts per token; 86\% of slots are empty}
   \LocalSource{notes/permute\_unpermute\_optimization.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.54\textwidth}
@@ -452,7 +452,7 @@ while (mask) {
       \noindent\NvidiaMiniMetric{4.27$\times$}{permute speedup}{396.1 $\rightarrow$ 92.7 $\mu$s}\hfill
       \NvidiaMiniMetric{2.04$\times$}{unpermute speedup}{269.5 $\rightarrow$ 131.8 $\mu$s}
       \vspace{.12in}
-      \begin{NvidiaCard}{Launch policy}
+      \begin{NvidiaCard}{Kernel configuration}
         Use 32 threads/token at latent $H=512$; larger hidden sizes keep wider thread groups
         to expose enough memory-level parallelism.
       \end{NvidiaCard}
@@ -460,7 +460,7 @@ while (mask) {
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Dense int16 routes enable one-pass scan bitsets}{Build expert and rank membership once, then use cheap bit tests downstream}
+\begin{frame}[fragile]{Dense int16 routes support one-pass scan bitsets}{Build expert and rank membership once, then use bit tests downstream}
   \LocalSource{notes/isolated-scan-bench.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.52\textwidth}
@@ -478,8 +478,8 @@ if local_mask & (1 << expert):
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.42\textwidth}
-      \begin{NvidiaCard}{Target isolated scan}
-        Best 512-thread template:
+      \begin{NvidiaCard}{Isolated scan benchmark}
+        Best tested 512-thread template:
         \[
           525.6 \rightarrow 331.7\,\mu\text{s}
           \quad(\alert{1.58\times})
@@ -493,7 +493,7 @@ if local_mask & (1 << expert):
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Combine tuning is a constrained pipeline search}{The 2,304-expert production tuple is a measured contribution, not a default guess}
+\begin{frame}[fragile]{Combine parameter tuning is a constrained pipeline search}{The 2,304-expert production tuple is measured rather than assumed}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.50\textwidth}
@@ -530,7 +530,7 @@ validate again in the full EP72 launch
   \end{columns}
 \end{frame}
 
-\begin{frame}{The winning combine tuple balances lookahead and SM efficiency}{Group 2 uses both pipelines while preserving enough FIFO depth}
+\begin{frame}{The selected combine tuple balances lookahead and SM efficiency}{Group 2 uses both pipelines while preserving sufficient FIFO depth}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \centering
   \resizebox{.94\textwidth}{!}{\begin{tikzpicture}[
@@ -550,17 +550,17 @@ validate again in the full EP72 launch
   \vspace{.14in}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{Enough lookahead}
+      \begin{NvidiaCard}{Sufficient lookahead}
         $32$ FIFO slots / $\sim8$ source ranks $\approx4$ tokens prefetched.
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{No excess depth}
+      \begin{NvidiaCard}{No additional depth benefit}
         G2S 64 $\rightarrow$ 128 changed 246.1 to 245.0 $\mu$s: saturation.
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.31\textwidth}
-      \begin{NvidiaCard}{Use fewer SMs}
+      \begin{NvidiaCard}{Reduced SM allocation}
         Group 2 matched group 1 throughput using 32 instead of 64 SMs.
       \end{NvidiaCard}
     \end{column}
@@ -568,12 +568,12 @@ validate again in the full EP72 launch
 \end{frame}
 
 \NvidiaPlotSlide
-  {Coordinated combine tuning cut the slow path by 2.8--4.2$\times$}
+  {Coordinated combine tuning reduces the critical path by 2.8--4.2$\times$}
   {Controlled H=512, local-E=32, top-$k=36$ comparison}
   {assets/generated/combine_tuning.pdf}
   {notes/hybrid-ep-sparse-opt-new.md; controlled B200 comparison}
 
-\begin{frame}{Combine remains structurally harder than dispatch}{Push can continue; pull must wait, synchronize, reduce, and then store}
+\begin{frame}{Combine has stronger synchronization constraints than dispatch}{Dispatch can proceed asynchronously; combine must wait, synchronize, reduce, and store}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.46\textwidth}
@@ -605,12 +605,12 @@ validate again in the full EP72 launch
 \end{frame}
 
 \NvidiaPlotSlide
-  {The controlled 8-GPU microbenchmark validates the sparse path}
+  {Controlled 8-GPU microbenchmarks validate the sparse execution path}
   {B300 NVL8, H=512, 8,192 tokens/rank, local-E=32, top-$k=36$}
   {assets/generated/hybrid_ep_microbench.pdf}
   {notes/hybrid-ep-sparse-opt-new.md; tuned reference vs tuned sparse path}
 
-\begin{frame}{A custom metadata all-gather was positive, but it is not the main result}{Use direct registered-buffer writes only where the collective is actually on the path}
+\begin{frame}{Custom metadata all-gather provides an isolated positive result}{Use direct registered-buffer writes only when the collective is on the critical path}
   \LocalSource{notes/final\_presentation/sparser\_moe\_final\_presentation\_content.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.44\textwidth}
@@ -631,7 +631,7 @@ validate again in the full EP72 launch
   gain is not attributed to all-gather alone.}
 \end{frame}
 
-\begin{frame}{Profiling rejected three attractive but wrong shortcuts}{Optimization also means narrowing the design space}
+\begin{frame}{Profiling excluded three unfavorable design alternatives}{Profiling narrows the feasible design space}
   \LocalSource{notes/direct\_permute\_ncu\_analysis.md; notes/isolated-scan-bench.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.31\textwidth}
@@ -655,15 +655,15 @@ validate again in the full EP72 launch
 \end{frame}
 
 \section{System integration and model results}
-\NvidiaTransitionSlide{3. Integrate once;\\measure the whole model}
+\NvidiaTransitionSlide{3. System integration\\and evaluation}
 \NvidiaSectionToc{System integration and model results}
 
-\begin{frame}[fragile]{Megatron Core keeps the full sparse path replayable}{Authorship boundaries are explicit}
+\begin{frame}[fragile]{Megatron Core integrates a replayable sparse execution path}{Contribution boundaries are explicit}
   \NvidiaSource{\texttt{notes/record\_stream\_removal.md};
     \texttt{notes/dense\_routing\_rebase\_design.md}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      \begin{NvidiaCard}{Colleagues' system contributions}
+      \begin{NvidiaCard}{Contributions from collaborating workstreams}
         \begin{itemize}
           \item Paged stash for bounded activation storage.
           \item Full-iteration CUDA graph capture and replay.
@@ -673,7 +673,7 @@ validate again in the full EP72 launch
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.48\textwidth}
-      \begin{NvidiaCard}{This work's integration surface}
+      \begin{NvidiaCard}{Integration delivered in this work}
         \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.5}{9}\selectfont]
 if te.has_dense_route_output() and \
    dispatcher.accepts_dense_route():
@@ -690,12 +690,12 @@ else:
 \end{frame}
 
 \NvidiaPlotSlide
-  {The full model shows where each stage moved the critical path}
+  {Stagewise full-model results reveal the evolving critical path}
   {OCI-AGA GB300, 1F1B + paged stash + full-iteration graph; median after warmup 5}
   {assets/generated/full_model_stages.pdf}
   {qwen3\_next\_2606\_image\_sweep\_20260728; wgrad-fix runs, 2026-07-30}
 
-\begin{frame}{The full sparse stack reaches 420--435 TFLOP/s/GPU}{The final jump is cross-layer: router, compact routes, sparse preprocessing, bitsets, and tuned combine}
+\begin{frame}{The full optimized stack achieves 420--435 TFLOP/s/GPU}{The final improvement is cross-layer: router, compact routes, sparse preprocessing, bitsets, and tuned combine}
   \NvidiaSource{\texttt{qwen3\_next\_2606\_image\_sweep\_20260728/README.md}}
   \noindent
   \NvidiaMetric{419.7}{2304E / EP72 median TFLOP/s/GPU}{127.2 no-tune baseline; 3.30$\times$}\hfill
@@ -710,53 +710,53 @@ else:
 \end{frame}
 
 \NvidiaPlotSlide
-  {Routing stress amplifies the MoE-only gain}
+  {MoE-only improvements increase with routing stress}
   {OCI-AGA GB300; 155 post-warmup iterations; matched full graph + paged stash}
   {assets/generated/moe_only_matrix.pdf}
   {moe\_perf\_canonical\_matrix\_20260730; median TFLOP/s/GPU}
 
-\begin{frame}{The largest MoE-only gains are the widest sparse shapes}{The optimized stack is useful beyond one 2,304-expert model}
+\begin{frame}{The largest MoE-only gains occur in the widest sparse configurations}{The optimized stack extends beyond the 2,304-expert target model}
   \NvidiaSource{\texttt{moe\_perf\_canonical\_matrix\_20260730/README.md}}
   \noindent
   \NvidiaMetric{3.77$\times$}{Qwen3-Next 2304E}{47.2 $\rightarrow$ 177.9}\hfill
   \NvidiaMetric{3.13$\times$}{Qwen3-Next 2048E}{57.4 $\rightarrow$ 179.4}\hfill
   \NvidiaMetric{2.24$\times$}{Qwen3.5 sparser 40B}{76.1 $\rightarrow$ 170.3}
   \vspace{.16in}
-  \begin{NvidiaEvidence}{Boundary case}
+  \begin{NvidiaEvidence}{Limiting case}
     Nemotron's proxy shape improved only 1.09$\times$: when expert compute is already large,
     router and sparse communication are a smaller fraction of the module.
     This matrix is MoE-only, without 1F1B; full graph and paged stash are matched.
   \end{NvidiaEvidence}
 \end{frame}
 
-\begin{frame}{What the evidence supports}{Separate isolated mechanism gains from system throughput}
+\begin{frame}{Evidence-supported conclusions}{Separate isolated mechanism gains from system throughput}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.46\textwidth}
-      \begin{NvidiaCard}{Supported claims}
+      \begin{NvidiaCard}{Supported conclusions}
         \begin{itemize}
-          \item Radix fixes pathological large-$E$, large-$K$ selection.
+          \item Radix selection resolves the pathological large-$E$, large-$K$ case.
           \item Compact int16 routes reduce logical metadata 32$\times$.
           \item Ballot skips inactive local experts.
-          \item Combine needs coordinated queue/group/batch tuning.
+          \item Combine performance requires coordinated queue, group, and batch tuning.
           \item Gains generalize most strongly to sparse, wide expert shapes.
         \end{itemize}
       \end{NvidiaCard}
     \end{column}
     \begin{column}{.46\textwidth}
-      \begin{NvidiaCard}{Claims to avoid}
+      \begin{NvidiaCard}{Interpretation constraints}
         \begin{itemize}
-          \item Do not add isolated speedups to predict training speed.
-          \item Do not call the EP72 tuple a universal default.
-          \item Do not say probabilities are removed from training.
-          \item Do not attribute colleagues' graph/stash/1F1B work to this project.
-          \item Do not mix MoE-only and full-model scopes.
+          \item Do not aggregate isolated speedups to predict end-to-end training performance.
+          \item Do not treat the EP72 tuple as a universal default.
+          \item Do not characterize probability transport as removed from training.
+          \item Do not attribute colleagues' graph, stash, or 1F1B work to this project.
+          \item Do not conflate MoE-only and full-model measurement scopes.
         \end{itemize}
       \end{NvidiaCard}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}{Sparser MoE became practical through one compact invariant}{Selected routes stay compact from the router to the owning expert and back}
+\begin{frame}{End-to-end route compactness enables practical Sparser MoE}{Selected routes remain compact from the router to the owning expert and back}
   \vspace{.02in}
   \centering
   \begin{NvidiaProgression}
@@ -787,7 +787,7 @@ else:
 \NvidiaTransitionSlide{Appendix}
 \NvidiaSectionToc{Appendix}
 
-\begin{frame}{Combine sensitivity explains the final group-2 choice}{More stages or groups are not monotonically better; EP72 validates 32 SMs / 72 / 8 / group 2 / batch 72}
+\begin{frame}{Combine sensitivity motivates the final group-2 configuration}{Neither stage count nor group count is monotonic; EP72 validates 32 SMs / 72 / 8 / group 2 / batch 72}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \renewcommand{\arraystretch}{1.25}
   \begin{tabularx}{\textwidth}{@{}>{\NvidiaSansMedium}X r r X@{}}
@@ -816,13 +816,13 @@ else:
     \bottomrule
   \end{tabularx}
   \vspace{.13in}
-  \begin{NvidiaEvidence}{Reading the table}
+  \begin{NvidiaEvidence}{Interpretation}
     PR \#2821 changes the selection algorithm; PR \#3012 redesigns forward and backward;
     PR \#3129 changes the API representation without regressing the target forward path.
   \end{NvidiaEvidence}
 \end{frame}
 
-\begin{frame}{Primary evidence map}{The deck is reproducible from local data and official model sources}
+\begin{frame}{Evidence provenance}{The presentation is reproducible from local measurements and official model sources}
   \fontsize{8.5}{10.5}\selectfont
   \renewcommand{\arraystretch}{1.20}
   \begin{tabularx}{\textwidth}{@{}>{\NvidiaSansMedium}l X@{}}
