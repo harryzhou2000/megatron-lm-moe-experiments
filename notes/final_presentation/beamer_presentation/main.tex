@@ -2,7 +2,7 @@
 \documentclass[aspectratio=169,10pt]{beamer}
 \usetheme{nvidialight}
 
-\title{Making Sparser MoE Practical}
+\title{Sparser MoE\\Explorations}
 \subtitle{Router, communication, and systems co-design at 2,304 experts}
 \author{Harry Hanyu}
 \date{Internship final presentation \enspace|\enspace July 2026}
@@ -25,6 +25,12 @@
     \includegraphics[width=.97\textwidth,height=2.60in,keepaspectratio]{#3}
   \end{frame}
 }
+\newcommand{\NvidiaSectionToc}[1]{%
+  \begin{frame}{Roadmap}{#1}
+    \vspace{.12in}
+    \tableofcontents[currentsection,hideallsubsections]
+  \end{frame}
+}
 
 \begin{document}
 
@@ -32,7 +38,9 @@
   \titlepage
 \end{frame}}
 
+\section{Context and target workload}
 \NvidiaTransitionSlide{Why sparser MoE changes\\the performance bottleneck}
+\NvidiaSectionToc{Context and target workload}
 
 \begin{frame}{Open MoEs are getting wider and more selective}{One visible direction is more capacity with a smaller active fraction}
   \NvidiaSource{\href{https://mistral.ai/news/mixtral-of-experts/}{Mistral};
@@ -209,7 +217,9 @@ cuda_graph.replay()
   \end{columns}
 \end{frame}
 
+\section{Fused-router optimization}
 \NvidiaTransitionSlide{1. Fix selection: from\\repeated scans to a\\router kernel family}
+\NvidiaSectionToc{Fused-router optimization}
 
 \begin{frame}[fragile]{The original top-$k$ path repeatedly rescanned a 2,304-wide row}{Radix selection changes the algorithm from $K$-dependent scans to fixed passes}
   \NvidiaSource{Matched B300 trace-back benchmark; TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{\#2821}}
@@ -350,7 +360,9 @@ hybrid_ep.dispatch(
   \end{columns}
 \end{frame}
 
+\section{HybridEP sparse exchange}
 \NvidiaTransitionSlide{2. Exchange only\\useful sparse state}
+\NvidiaSectionToc{HybridEP sparse exchange}
 
 \begin{frame}{HybridEP is a pipeline of metadata, remote writes, and remote reads}{Each stage has a different sparsity and latency failure mode}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
@@ -642,7 +654,9 @@ validate again in the full EP72 launch
   \vspace{.14in}
 \end{frame}
 
+\section{System integration and model results}
 \NvidiaTransitionSlide{3. Integrate once;\\measure the whole model}
+\NvidiaSectionToc{System integration and model results}
 
 \begin{frame}[fragile]{Megatron Core keeps the full sparse path replayable}{Authorship boundaries are explicit}
   \NvidiaSource{\texttt{notes/record\_stream\_removal.md};
@@ -769,7 +783,9 @@ else:
 \end{frame}
 
 \appendix
+\section{Appendix}
 \NvidiaTransitionSlide{Appendix}
+\NvidiaSectionToc{Appendix}
 
 \begin{frame}{Combine sensitivity explains the final group-2 choice}{More stages or groups are not monotonically better; EP72 validates 32 SMs / 72 / 8 / group 2 / batch 72}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
