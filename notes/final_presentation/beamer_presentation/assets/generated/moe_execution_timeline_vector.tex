@@ -11,15 +11,15 @@
 \definecolor{nvblack}{HTML}{333333}
 
 \newcommand{\Stage}[6]{%
-  \node[font=\bfseries\fontsize{24}{28}\selectfont,text=nvblack,align=center]
+  \node[font=\bfseries\fontsize{26}{30}\selectfont,text=nvblack,align=center]
     at (#1,4.25) {#2};
-  \node[font=\ttfamily\fontsize{10}{12}\selectfont,text=nvgray,align=center]
+  \node[font=\ttfamily\fontsize{11}{13}\selectfont,text=nvgray,align=center]
     at (#1,3.90) {#3};
-  \node[font=\fontsize{15}{18}\selectfont,text=nvcharcoal,align=center]
+  \node[font=\fontsize{16}{19}\selectfont,text=nvcharcoal,align=center]
     at (#1,3.18) {#4};
-  \node[font=\bfseries\fontsize{11}{13}\selectfont,text=nvidiagreen,align=center]
+  \node[font=\bfseries\fontsize{12}{14}\selectfont,text=nvidiagreen,align=center]
     at (#1,2.25) {#5};
-  \node[font=\fontsize{11}{13}\selectfont,text=nvgray,align=center]
+  \node[font=\fontsize{11.5}{13.5}\selectfont,text=nvgray,align=center]
     at (#1,1.98) {#6};
 }
 
@@ -39,25 +39,27 @@
   \Stage{3.40}{Router}{route}
     {Project scores;\\select top-$K$}{GEMM + METADATA}{$\mathcal{O}(T H E) + \mathcal{O}(T E)$}
   \Stage{5.60}{Latent Down}{fc1\_latent\_proj}
-    {Latent only:\\$H \rightarrow H_{\mathrm{latent}}$}{GEMM}{$\mathcal{O}(T H H_{\mathrm{latent}})$}
+    {Latent: $H \rightarrow H_{\mathrm{latent}}$\\Non-latent: $0$}{GEMM}{$\mathcal{O}(T H H_{\mathrm{latent}})$}
   \Stage{7.80}{Dispatch}{dispatch\_preprocess + dispatch}
-    {Permute routes;\\exchange inputs}{COMM + METADATA}{$\mathcal{O}(T K H_x)$}
+    {Permute routes;\\exchange inputs}{COMM + META}{$\mathcal{O}(T K H_{\mathrm{latent}})$}
   \Stage{10.00}{Expert MLP}{routed\_experts\_compute}
     {Run local MLPs\\on received tokens}{GEMM}{$\mathcal{O}(T K H_{\mathrm{latent}} H_{\mathrm{expert}})$}
   \Stage{12.20}{Combine}{token\_combine}
-    {Exchange outputs;\\unpermute and sum}{COMM + METADATA}{$\mathcal{O}(T K H_x)$}
+    {Exchange outputs;\\unpermute and sum}{COMM + META}{$\mathcal{O}(T K H_{\mathrm{latent}})$}
   \Stage{14.40}{Latent Up}{fc2\_latent\_proj}
-    {Latent only:\\$H_{\mathrm{latent}} \rightarrow H$}{GEMM}{$\mathcal{O}(T H H_{\mathrm{latent}})$}
+    {Latent: $H_{\mathrm{latent}} \rightarrow H$\\Non-latent: $0$}{GEMM}{$\mathcal{O}(T H H_{\mathrm{latent}})$}
 
   \draw[-{Latex[length=3.1mm]},nvidiagreen,line width=1.8pt] (.55,1.15) -- (15.55,1.15);
   \foreach \x in {1.20,3.40,5.60,7.80,10.00,12.20,14.40}
     \fill[nvidiagreen] (\x,1.15) circle (.115);
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (1.20,.73) {hidden states};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (3.40,.73) {IDs + probabilities};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (5.60,.73) {$H_{\mathrm{latent}}$};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (7.80,.73) {expert inputs};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (10.00,.73) {expert outputs};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (12.20,.73) {latent output};
-  \node[font=\fontsize{9}{11}\selectfont,text=nvgray,anchor=north] at (14.40,.73) {$[T \times H]$};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (1.20,.73) {normalized states};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (3.40,.73) {routing metadata};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (5.60,.73) {latent activations};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (7.80,.73) {dispatched inputs};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (10.00,.73) {expert outputs};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (12.20,.73) {combined latent output};
+  \node[font=\fontsize{10}{12}\selectfont,text=nvgray,anchor=north] at (14.40,.73) {output states};
+  \node[font=\fontsize{8}{10}\selectfont,text=nvgray,anchor=north] at (8.00,.23)
+    {Scope: routed-expert path only; shared-expert execution is omitted.};
 \end{tikzpicture}
 \end{document}

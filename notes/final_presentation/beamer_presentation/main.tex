@@ -1,6 +1,7 @@
 % Compile with: latexmk -xelatex -outdir=build main.tex
 \documentclass[aspectratio=169,10pt]{beamer}
 \usetheme{nvidialight}
+\usefonttheme[onlymath]{serif}
 
 \title{Sparser MoE\\Explorations}
 \subtitle{Router, communication, and systems co-design at 2,304 experts}
@@ -101,7 +102,7 @@
   \NvidiaSource{\texttt{MLM/megatron/core/transformer/transformer\_layer.py};
     \texttt{MLM/megatron/core/transformer/moe/moe\_layer.py}}
   \centering
-  \includegraphics[width=.98\textwidth,height=2.55in,keepaspectratio]{assets/generated/moe_execution_timeline.pdf}
+  \includegraphics[width=.98\textwidth,height=2.40in,keepaspectratio]{assets/generated/moe_execution_timeline.pdf}
   \vspace{.03in}
   \small\textcolor{NvidiaGreen}{\NvidiaSansMedium Optimization target.}\quad
   Sparse performance depends on router work, metadata transformation, token exchange,
@@ -116,8 +117,8 @@
       \[
         \mathrm{FLOPs}_{\mathrm{expert}} \propto T K H_{\mathrm{latent}} H_{\mathrm{expert}}
       \]
-      \small Latent MoE does not remove the per-route expert GEMM: every selected route still
-      executes its expert MLP. Without latent MoE, replace $H_{\mathrm{latent}}$ with $H$.
+      \small Every selected route still executes its expert MLP. On a non-latent path,
+      down/up projections are absent (zero cost) and $H_{\mathrm{latent}}=H$.
     \end{column}
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium Token exchange}\par
@@ -127,7 +128,7 @@
       \]
       \small Router score projection costs $\mathcal{O}(T H E)$ and top-$k$ selection adds
       $\mathcal{O}(T E)$ metadata work. Latent MoE narrows the exchanged payload when
-      $H_{\mathrm{latent}} \ll H$; without it, replace $H_{\mathrm{latent}}$ with $H$.
+      $H_{\mathrm{latent}} \ll H$; without it, $H_{\mathrm{latent}}=H$.
     \end{column}
   \end{columns}
   \vspace{.04in}
