@@ -5,7 +5,7 @@
 
 \title{Sparser MoE\\Explorations}
 \subtitle{Router, communication, and systems co-design at 2304 experts}
-\author{Harry Hanyu}
+\author{Harry Zhou | Mentor: Robin Zhang}
 \date{Internship final presentation \enspace|\enspace July 2026}
 
 \NvidiaSetFooter{Sparser MoE optimization}
@@ -237,7 +237,7 @@ cuda_graph.replay()
 \NvidiaTransitionSlide{section-router}{Router Optimization}
 \NvidiaSectionToc{Fused-Router Optimization}
 
-\begin{frame}[shrink=5]{Radix Selection}{PR \#2821 replaces repeated maximum selection with a one-warp radix selector}
+\begin{frame}[shrink=5]{Radix Selection}{\href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{TE PR \#2821} replaces repeated maximum selection with a one-warp radix selector}
   \NvidiaSource{\href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{TE PR \#2821};
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
@@ -507,7 +507,7 @@ else
   \end{columns}
 \end{frame}
 
-\begin{frame}{Dense Format}{Selected expert IDs are the sparse contract; the old map encoded mostly zeros}
+\begin{frame}{Dense Routing Map}{\href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{TE PR \#3129} replaces the $[T,E]$ byte map with selected int16 IDs}
   \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
     \texttt{notes/dense\_routing\_rebase\_design.md}}
   \begin{columns}[T,onlytextwidth]
@@ -538,7 +538,7 @@ else
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Dense Writer}{The forward kernel emits one int16 index per selected route}
+\begin{frame}[fragile]{Dense Routing Map: Forward}{The index-output API emits one int16 ID per selected route}
   \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
@@ -566,7 +566,7 @@ if constexpr (IndexType == int16_t)
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Dense Backward}{Backward traverses selected IDs directly and zero-fills the required dense gradient}
+\begin{frame}[fragile]{Dense Routing Map: Backward}{The dedicated index path traverses selected IDs and zero-fills the dense gradient}
   \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
@@ -1126,15 +1126,16 @@ else:
     Checkpoint & Forward & Backward & Output \\
     \midrule
     Before large top-$k$ support & 45.358 ms & 3.552 ms & sparse bool \\
-    PR \#2821 & 3.587 ms & 3.553 ms & sparse bool \\
-    PR \#3012 & 1.904 ms & 0.375 ms & sparse bool \\
-    PR \#3129 & 1.899 ms & 0.375 ms & dense int16 \\
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{PR \#2821} & 3.587 ms & 3.553 ms & sparse bool \\
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{PR \#3012} & 1.904 ms & 0.375 ms & sparse bool \\
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{PR \#3129} & 1.899 ms & 0.375 ms & dense int16 \\
     \bottomrule
   \end{tabularx}
   \vspace{.13in}
   \begin{NvidiaEvidence}{Interpretation}
-    PR \#2821 changes the selection algorithm; PR \#3012 redesigns forward and backward;
-    PR \#3129 changes the API representation without regressing the target forward path.
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{PR \#2821} changes the selection algorithm;
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{PR \#3012} redesigns forward and backward;
+    \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{PR \#3129} changes the API representation without regressing the target forward path.
   \end{NvidiaEvidence}
 \end{frame}
 
