@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="570" viewBox="0 0 1600 570" role="img" aria-labelledby="title desc">
+  <title id="title">HybridEP forward and backward pipeline</title>
+  <desc id="desc">A two-row timeline shows HybridEP forward metadata preparation, dispatch, expert MLP, and combine; then backward reuse of the saved metadata handle.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10Z" fill="#76b900"/>
+    </marker>
+    <style>
+      .title { font-family: Helvetica, Arial, sans-serif; font-weight: 700; fill: #333333; }
+      .code { font-family: Menlo, Consolas, monospace; fill: #767676; }
+      .body { font-family: Helvetica, Arial, sans-serif; fill: #4d4d4d; }
+      .kind { font-family: Helvetica, Arial, sans-serif; font-weight: 700; fill: #76b900; }
+      .note { font-family: Helvetica, Arial, sans-serif; fill: #767676; }
+    </style>
+  </defs>
+
+  <!-- Forward rail -->
+  <line x1="35" y1="29" x2="225" y2="29" stroke="#767676" stroke-opacity=".6" stroke-width="1.4"/>
+  <text x="130" y="20" text-anchor="middle" class="note" font-size="15">HybridEP dispatch</text>
+  <line x1="255" y1="29" x2="1565" y2="29" stroke="#767676" stroke-opacity=".6" stroke-width="1.4"/>
+  <text x="910" y="20" text-anchor="middle" class="note" font-size="15">Forward: metadata preparation and expert execution</text>
+
+  <text x="115" y="75" text-anchor="middle" class="title" font-size="25">Route IDs</text>
+  <text x="115" y="100" text-anchor="middle" class="code" font-size="12">int16 [T,K] / bool [T,E]</text>
+  <text x="115" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="115" dy="0">Selected routes</tspan><tspan x="115" dy="20">enter metadata</tspan></text>
+  <text x="115" y="174" text-anchor="middle" class="kind" font-size="13">INPUT</text>
+
+  <text x="325" y="75" text-anchor="middle" class="title" font-size="25">All-gather</text>
+  <text x="325" y="100" text-anchor="middle" class="code" font-size="12">ag_nvl_tma_kernel</text>
+  <text x="325" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="325" dy="0">Exchange route</tspan><tspan x="325" dy="20">metadata</tspan></text>
+  <text x="325" y="174" text-anchor="middle" class="kind" font-size="13">COMM</text>
+
+  <text x="535" y="75" text-anchor="middle" class="title" font-size="25">Scan</text>
+  <text x="535" y="100" text-anchor="middle" class="code" font-size="12">scan&lt;TOPK&gt;</text>
+  <text x="535" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="535" dy="0">Build rank and</tspan><tspan x="535" dy="20">expert maps</tspan></text>
+  <text x="535" y="174" text-anchor="middle" class="kind" font-size="13">METADATA</text>
+
+  <text x="755" y="75" text-anchor="middle" class="title" font-size="25">Permute Prep</text>
+  <text x="755" y="100" text-anchor="middle" class="code" font-size="12">scan&lt;TOPK&gt; outputs</text>
+  <text x="755" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="755" dy="0">Create order and</tspan><tspan x="755" dy="20">chunk layout</tspan></text>
+  <text x="755" y="174" text-anchor="middle" class="kind" font-size="13">METADATA</text>
+
+  <text x="1000" y="75" text-anchor="middle" class="title" font-size="25">Dispatch + Permute</text>
+  <text x="1000" y="100" text-anchor="middle" class="code" font-size="12">dispatch_kernel + permute_kernel</text>
+  <text x="1000" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="1000" dy="0">S2G push: tokens +</tspan><tspan x="1000" dy="20">selected probabilities</tspan></text>
+  <text x="1000" y="174" text-anchor="middle" class="kind" font-size="13">COMM + META</text>
+
+  <text x="1225" y="75" text-anchor="middle" class="title" font-size="25">Expert MLP</text>
+  <text x="1225" y="100" text-anchor="middle" class="code" font-size="12">GroupedMLP</text>
+  <text x="1225" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="1225" dy="0">Local experts process</tspan><tspan x="1225" dy="20">contiguous tokens</tspan></text>
+  <text x="1225" y="174" text-anchor="middle" class="kind" font-size="13">GEMM</text>
+
+  <text x="1460" y="75" text-anchor="middle" class="title" font-size="25">Combine + Unpermute</text>
+  <text x="1460" y="100" text-anchor="middle" class="code" font-size="12">combine_kernel + unpermute_kernel</text>
+  <text x="1460" y="129" text-anchor="middle" class="body" font-size="17"><tspan x="1460" dy="0">G2S pull: restore</tspan><tspan x="1460" dy="20">order and reduce</tspan></text>
+  <text x="1460" y="174" text-anchor="middle" class="kind" font-size="13">COMM + META</text>
+
+  <line x1="55" y1="205" x2="1545" y2="205" stroke="#76b900" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g fill="#76b900">
+    <circle cx="115" cy="205" r="9"/><circle cx="325" cy="205" r="9"/><circle cx="535" cy="205" r="9"/>
+    <circle cx="755" cy="205" r="9"/><circle cx="1000" cy="205" r="9"/><circle cx="1225" cy="205" r="9"/><circle cx="1460" cy="205" r="9"/>
+  </g>
+  <text x="115" y="239" text-anchor="middle" class="note" font-size="14">local route metadata</text>
+  <text x="325" y="239" text-anchor="middle" class="note" font-size="14">global route metadata</text>
+  <text x="535" y="239" text-anchor="middle" class="note" font-size="14">maps and counts</text>
+  <text x="755" y="239" text-anchor="middle" class="note" font-size="14">saved handle</text>
+  <text x="1000" y="239" text-anchor="middle" class="note" font-size="14">expert-contiguous input</text>
+  <text x="1225" y="239" text-anchor="middle" class="note" font-size="14">weighted expert output</text>
+  <text x="1460" y="239" text-anchor="middle" class="note" font-size="14">combined MoE output</text>
+
+  <!-- Backward rail -->
+  <line x1="35" y1="300" x2="225" y2="300" stroke="#767676" stroke-opacity=".6" stroke-width="1.4"/>
+  <text x="130" y="291" text-anchor="middle" class="note" font-size="15">Autograd</text>
+  <line x1="255" y1="300" x2="1565" y2="300" stroke="#767676" stroke-opacity=".6" stroke-width="1.4"/>
+  <text x="910" y="291" text-anchor="middle" class="note" font-size="15">Backward: reuse the saved layout; no second route all-gather or scan</text>
+
+  <text x="220" y="346" text-anchor="middle" class="title" font-size="25">Permute Prep Handle</text>
+  <text x="220" y="371" text-anchor="middle" class="code" font-size="12">saved maps + counts + layout</text>
+  <text x="220" y="400" text-anchor="middle" class="body" font-size="17"><tspan x="220" dy="0">Reuse forward</tspan><tspan x="220" dy="20">metadata</tspan></text>
+  <text x="220" y="445" text-anchor="middle" class="kind" font-size="13">REUSE</text>
+
+  <text x="575" y="346" text-anchor="middle" class="title" font-size="25">Dispatch + Permute</text>
+  <text x="575" y="371" text-anchor="middle" class="code" font-size="12">dispatch_kernel + permute_kernel</text>
+  <text x="575" y="400" text-anchor="middle" class="body" font-size="17"><tspan x="575" dy="0">S2G push: activation grads</tspan><tspan x="575" dy="20">no probability payload</tspan></text>
+  <text x="575" y="445" text-anchor="middle" class="kind" font-size="13">COMM + META</text>
+
+  <text x="960" y="346" text-anchor="middle" class="title" font-size="25">MLP Backward</text>
+  <text x="960" y="371" text-anchor="middle" class="code" font-size="12">GroupedMLP.backward</text>
+  <text x="960" y="400" text-anchor="middle" class="body" font-size="17"><tspan x="960" dy="0">Per-expert activation</tspan><tspan x="960" dy="20">and probability grads</tspan></text>
+  <text x="960" y="445" text-anchor="middle" class="kind" font-size="13">GEMM</text>
+
+  <text x="1350" y="346" text-anchor="middle" class="title" font-size="25">Combine + Unpermute</text>
+  <text x="1350" y="371" text-anchor="middle" class="code" font-size="12">combine_kernel + unpermute_kernel</text>
+  <text x="1350" y="400" text-anchor="middle" class="body" font-size="17"><tspan x="1350" dy="0">G2S pull: grad hidden</tspan><tspan x="1350" dy="20">+ grad probabilities</tspan></text>
+  <text x="1350" y="445" text-anchor="middle" class="kind" font-size="13">COMM + META</text>
+
+  <line x1="110" y1="476" x2="1510" y2="476" stroke="#76b900" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <g fill="#76b900"><circle cx="220" cy="476" r="9"/><circle cx="575" cy="476" r="9"/><circle cx="960" cy="476" r="9"/><circle cx="1350" cy="476" r="9"/></g>
+  <text x="220" y="510" text-anchor="middle" class="note" font-size="14">forward handle</text>
+  <text x="575" y="510" text-anchor="middle" class="note" font-size="14">expert-ordered grad input</text>
+  <text x="960" y="510" text-anchor="middle" class="note" font-size="14">expert gradients</text>
+  <text x="1350" y="510" text-anchor="middle" class="note" font-size="14">grad hidden + grad probabilities</text>
+  <text x="800" y="553" text-anchor="middle" class="note" font-size="13">The forward handle survives until combine; CUDA-graph capture retains it for replay.</text>
+</svg>

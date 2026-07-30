@@ -406,7 +406,42 @@ experts. The capability check keeps older TE or dispatcher combinations working.
 
 ---
 
-## 8. HybridEP probability slicing: stop transmitting irrelevant columns
+## 8. HybridEP execution pipeline: one metadata handle, two autograd directions
+
+The HybridEP dispatch/combine pair is not a symmetric all-to-all wrapper. The first forward
+dispatch constructs a metadata handle, and the later forward combine plus both backward
+operations reuse it.
+
+```text
+forward metadata (once per dispatch/combine pair):
+route IDs -> all-gather -> scan -> permute preprocessing -> saved handle
+
+forward data path:
+dispatch_with_permute(hidden, selected_probs)
+    -> expert MLP
+    -> combine_with_unpermute(expert outputs)
+
+backward data path (same handle; no repeated all-gather or scan):
+dispatch_with_permute(grad output, no probability payload)
+    -> expert MLP backward
+    -> combine_with_unpermute(grad expert input, grad_probs)
+```
+
+`dispatch_with_permute` performs the local expert ordering plus the dispatch S2G push. In the
+forward direction it transports the selected/local probabilities required by the weighted expert
+calculation. `combine_with_unpermute` performs the return G2S pull, reduction, and restoration
+of token order. Its backward invocation carries the probability gradient back to the router.
+
+Megatron Core supplies the route IDs/probabilities to the first call and keeps the resulting
+handle alive through `combine()`; during CUDA-graph capture it retains handles for later replay.
+
+**Speaker takeaway:** The all-gather and scan are forward metadata construction, whereas the
+reverse autograd path reuses their resulting maps and layout. This is why transport and
+permutation changes must be assessed across the whole dispatch/combine pair.
+
+---
+
+## 9. HybridEP probability slicing: stop transmitting irrelevant columns
 
 The original single-NVL-domain dispatch path sent probability data for the full expert set.
 A destination rank only needs the probabilities for its own experts.
@@ -452,7 +487,7 @@ unnecessary probability traffic, not from an unrelated launch change.
 
 ---
 
-## 9. Permute/unpermute: iterate active experts, not all local slots
+## 10. Permute/unpermute: iterate active experts, not all local slots
 
 For the NVL8 test shape, a token activates about `4.5` of `32` local expert slots. The
 reference preprocessing loop still tested every slot and used a fixed 128-thread group.
@@ -505,7 +540,7 @@ accesses behave like a contiguous bandwidth test.
 
 ---
 
-## 10. HybridEP combine tuning: the optimized parameter set is a contribution
+## 11. HybridEP combine tuning: the optimized parameter set is a contribution
 
 This should be a first-class slide. The result was not merely "use more stages"; it was a
 balanced tuple for the H=512 pull-and-reduce pipeline.
@@ -621,7 +656,7 @@ hide NVLink latency.
 
 ---
 
-## 11. Why combine remains harder than dispatch
+## 12. Why combine remains harder than dispatch
 
 NCU showed a structural push-versus-pull asymmetry:
 
@@ -662,7 +697,7 @@ relative to its extra JIT variants and parameter surface.
 
 ---
 
-## 12. Dense scan: bitsets replace repeated sparse membership work
+## 13. Dense scan: bitsets replace repeated sparse membership work
 
 After compact `[T,K]` routing landed, HybridEP still needed to determine local-expert and
 destination-rank membership efficiently.
@@ -705,7 +740,7 @@ membership checks. A more aggressive warp-pruning loop was rejected because redu
 
 ---
 
-## 13. Negative results: profiling prevented attractive but wrong optimizations
+## 14. Negative results: profiling prevented attractive but wrong optimizations
 
 Keep this concise in the main talk; move detailed counters to the appendix.
 
@@ -737,7 +772,7 @@ remote traffic or move serialization into a harder-to-hide place.
 
 ---
 
-## 14. Results on the original 2,304-expert investigation
+## 15. Results on the original 2,304-expert investigation
 
 Use a timeline, not an additive waterfall:
 
@@ -761,7 +796,7 @@ Therefore:
 
 ---
 
-## 15. Generalization: matched end-to-end model benchmarks
+## 16. Generalization: matched end-to-end model benchmarks
 
 The June `hepS2F2` stack combined:
 
@@ -795,7 +830,7 @@ benefit, but less dramatically.
 
 ---
 
-## 16. Later MoE-module benchmark: broader shape coverage
+## 17. Later MoE-module benchmark: broader shape coverage
 
 The July benchmark measured `160/160` MoE-module performance iterations with full-iteration
 CUDA graph and paged stash, without 1f1b. It is not a full-model training benchmark.
@@ -816,7 +851,7 @@ replace the end-to-end training results.
 
 ---
 
-## 17. Closing takeaways
+## 18. Closing takeaways
 
 1. **Sparser MoE is a system problem.** Large `E`, large `K`, and small expert dimensions
    move the bottleneck from GEMM toward routing, metadata, synchronization, and NVLink.

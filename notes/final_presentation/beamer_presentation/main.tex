@@ -746,38 +746,9 @@ for (int k = lane_id; k < topk; k += 32) {
 \NvidiaTransitionSlide{section-hybridep}{HybridEP Optimization}
 \NvidiaSectionToc{HybridEP Optimization}
 
-\begin{frame}{HybridEP Pipeline}{Sparse routing reduces metadata work, local work, and combine latency}
-  \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
+\begin{frame}{HybridEP Pipeline}{Metadata is prepared once; the saved handle drives both directions}
   \centering
-  \begin{tikzpicture}[
-    stage/.style={text width=1.58in,align=center,font=\small},
-    arrow/.style={-{Latex[length=2.0mm]},line width=.9pt,NvidiaGreen},
-    node distance=.12in
-  ]
-    \node[stage] (m) {\NvidiaSansMedium Metadata\\[2pt]
-      {\scriptsize Route IDs $\rightarrow$ scan/bitsets}};
-    \node[stage,right=of m] (r) {\NvidiaSansMedium Routing\\[2pt]
-      {\scriptsize Dispatch $\rightarrow$ permute}};
-    \node[stage,right=of r] (c) {\NvidiaSansMedium Execution and return\\[2pt]
-      {\scriptsize Expert MLP $\rightarrow$ combine $\rightarrow$ unpermute}};
-    \draw[arrow] (m) -- (r);
-    \draw[arrow] (r) -- (c);
-  \end{tikzpicture}
-  \vspace{.22in}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}Compact metadata}\par
-      \small Avoid bool $[T,E]$ and repeated membership tests.
-    \end{column}
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}Sparse local execution}\par
-      \small Skip inactive expert slots in permute and unpermute.
-    \end{column}
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}Pipeline configuration}\par
-      \small Tune pull depth, grouping, and reduction batch jointly.
-    \end{column}
-  \end{columns}
+  \includegraphics[width=.99\textwidth,height=3.20in,keepaspectratio]{assets/generated/hybrid_ep_pipeline.pdf}
 \end{frame}
 
 \begin{frame}[fragile]{Probability Transport}{Selected probabilities remain required for weighted activations and gradients}
