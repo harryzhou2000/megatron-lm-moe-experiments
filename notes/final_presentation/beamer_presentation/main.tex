@@ -4,7 +4,7 @@
 \usefonttheme[onlymath]{serif}
 
 \title{Sparser MoE\\Explorations}
-\subtitle{Router, communication, and systems co-design at 2,304 experts}
+\subtitle{Router, communication, and systems co-design at 2304 experts}
 \author{Harry Hanyu}
 \date{Internship final presentation \enspace|\enspace July 2026}
 
@@ -142,13 +142,13 @@
   \noindent
   \begin{minipage}[t]{.46\textwidth}
     {\NvidiaSansMedium Backbone \& Attention}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
-    \fontsize{8.5}{10}\selectfont 24 layers; $H=2{,}048$\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont 24 layers; $H=2048$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont GQA: 32 Q / 2 KV groups; GDN disabled
   \end{minipage}
   \hfill
   \begin{minipage}[t]{.46\textwidth}
     {\NvidiaSansMedium Latent MoE}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
-    \fontsize{8.5}{10}\selectfont $2{,}304$ experts; top-$k=36$; $H_{\mathrm{latent}}=512$\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont $2304$ experts; top-$k=36$; $H_{\mathrm{latent}}=512$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont FFN/shared width $512$; EP72; 32 E/rank
   \end{minipage}
   \par\vspace{.07in}
@@ -157,7 +157,7 @@
     \begin{minipage}[t]{.47\linewidth}
       {\fontsize{16}{18}\selectfont\NvidiaSansMedium 4.5$\times$}\par
       \fontsize{8.5}{10}\selectfont router scores\par
-      \fontsize{8}{9.5}\selectfont 512 $\rightarrow$ 2,304
+      \fontsize{8}{9.5}\selectfont 512 $\rightarrow$ 2304
     \end{minipage}\hfill
     \begin{minipage}[t]{.47\linewidth}
       {\fontsize{16}{18}\selectfont\NvidiaSansMedium 3.6$\times$}\par
@@ -237,7 +237,7 @@ cuda_graph.replay()
 \NvidiaTransitionSlide{section-router}{Router Optimization}
 \NvidiaSectionToc{Fused-Router Optimization}
 
-\begin{frame}{Selection Complexity}{Large $E$ and large $K$ turn repeated selection into the router bottleneck}
+\begin{frame}[shrink=5]{Radix Selection}{PR \#2821 replaces repeated maximum selection with a one-warp radix selector}
   \NvidiaSource{\href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{TE PR \#2821};
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
@@ -248,7 +248,7 @@ cuda_graph.replay()
         \sum_{r=1}^{K} E\,r = \alert{O(EK^2)}.
       \]
       \vspace{.05in}
-      \small At $E=2{,}304$, $K=36$, selection repeats a full expert-row walk for every
+      \small At $E=2304$, $K=36$, selection repeats a full expert-row walk for every
       selected rank.
     \end{column}
     \begin{column}{.47\textwidth}
@@ -259,17 +259,18 @@ cuda_graph.replay()
         8E + 2E = \alert{O(E)}.
       \]
       \vspace{.05in}
-      \small Work depends on the score representation, not the requested top-$k$. The
-      threshold retains the simple path where radix setup is not profitable.
+      \fontsize{8.5}{10}\selectfont At $E=2304$, per-thread selection needs a 9~KB score row
+      per lane. CTA-wide selection adds inter-warp barriers and shared-memory coordination. TE
+      retains one warp per token: lanes stride across experts and use shuffle collectives.
     \end{column}
   \end{columns}
   \vspace{.02in}
-  \noindent\NvidiaMetric{2,304}{experts}{one score row per token}\hfill
+  \noindent\NvidiaMetric{2304}{experts}{one score row per token}\hfill
   \NvidiaMetric{36}{selected IDs}{large sparse fan-out}\hfill
   \NvidiaMetric{8}{radix passes}{FP32, 4 bits/pass}
 \end{frame}
 
-\begin{frame}[fragile]{Radix Selection}{Each pass narrows the rank-$K$ score prefix without materializing a sort}
+\begin{frame}[fragile]{Radix Selection: Algorithm}{Each pass narrows the rank-$K$ score prefix without materializing a sort}
   \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{\#2821};
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
@@ -304,7 +305,7 @@ gather ties in index order until topk
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Radix Kernel}{The CUDA kernel carries the rank state in registers and uses warp collectives}
+\begin{frame}[fragile]{Radix Selection: Implementation}{The CUDA kernel carries the rank state in registers and uses warp collectives}
   \NvidiaSource{\texttt{TE/transformer\_engine/common/fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.58\textwidth}
@@ -326,7 +327,7 @@ for (int pass = kPasses - 1; pass >= 0; --pass) {
       then warp reductions combine 16 bucket counts.
       \vspace{.10in}
       \begin{NvidiaEvidence}{Bounded support}
-        Packed 8-bit counters support $E\leq8160$; the 2,304-expert target is well inside that
+        Packed 8-bit counters support $E\leq8160$; the 2304-expert target is well inside that
         range.
       \end{NvidiaEvidence}
     \end{column}
@@ -366,7 +367,7 @@ for (int pass = kPasses - 1; pass >= 0; --pass) {
   \end{NvidiaEvidence}
 \end{frame}
 
-\begin{frame}[fragile]{Loop Fusion}{The score path writes each expert value once instead of staging separate loops}
+\begin{frame}[fragile]{Secondary Optimizations: Loop Fusion}{The score path writes each expert value once instead of staging separate loops}
   \NvidiaSource{TE commit \texttt{6d6005a7};
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
@@ -398,7 +399,7 @@ if constexpr (ScoreFunc == kSigmoid) {
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Async Loading}{Raw logits are prefetched with \texttt{cp.async} while the current tile is selected}
+\begin{frame}[fragile]{Secondary Optimizations: Async Loading}{Raw logits are prefetched with \texttt{cp.async} while the current tile is selected}
   \NvidiaSource{TE commit \texttt{69a7c46f};
     \texttt{TE/.../fused\_router/async\_loader.h}}
   \begin{columns}[T,onlytextwidth]
@@ -426,7 +427,7 @@ cp_async_commit();
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Packed Radix}{Eight-bit fields lower histogram bookkeeping from 32 registers to four}
+\begin{frame}[fragile]{Secondary Optimizations: Packed Radix}{Eight-bit fields lower histogram bookkeeping from 32 registers to four}
   \NvidiaSource{TE commit \texttt{00b0dad2};
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
@@ -445,15 +446,15 @@ unsigned total = warp_allreduce_sum(count);
     \end{column}
     \begin{column}{.38\textwidth}
       {\NvidiaSansMedium Why it is safe}\NvidiaTightRule{.6pt}\vspace{.07in}
-      \small Each lane sees at most $\lceil E/32\rceil$ scores per bucket. For $E=2{,}304$,
+      \small Each lane sees at most $\lceil E/32\rceil$ scores per bucket. For $E=2304$,
       the largest count is 72, which fits in an 8-bit field.
       \vspace{.10in}
-      \small The implementation enforces $E\leq8{,}160$ so a packed counter cannot overflow.
+      \small The implementation enforces $E\leq8160$ so a packed counter cannot overflow.
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Static Scores}{Compile-time score specialization removes the runtime score-function branch}
+\begin{frame}[fragile]{Secondary Optimizations: Static Scores}{Compile-time score specialization removes the runtime score-function branch}
   \NvidiaSource{TE commit \texttt{47c98811};
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
@@ -482,7 +483,7 @@ else if constexpr (ScoreFunc == kSqrtsoftplus)
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Merged Head}{A single launcher preserves a lightweight head for small $k$ and the optimized head for large shapes}
+\begin{frame}[fragile]{Secondary Optimizations: Merged Head}{A single launcher preserves a lightweight head for small $k$ and the optimized head for large shapes}
   \NvidiaSource{TE commit \texttt{9cfb651a};
     \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
   \begin{columns}[T,onlytextwidth]
@@ -501,7 +502,7 @@ else
       \small The simple head avoids async-loader and persistent-grid overhead on conventional
       small-$k$ shapes. The optimized head is selected only when radix work dominates.
       \vspace{.10in}
-      \small This is why gains at $2{,}304/36$ do not require regressing common router shapes.
+      \small This is why gains at $2304/36$ do not require regressing common router shapes.
     \end{column}
   \end{columns}
 \end{frame}
@@ -515,17 +516,17 @@ else
       \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r r@{}}
         Format & Shape & Bytes/token \\
         \midrule
-        Byte map & $[E]$ & 2,304 \\
+        Byte map & $[E]$ & 2304 \\
         Selected IDs & int16 $[K]$ & 72
       \end{tabularx}
       \[
-        \frac{E}{2K}=\frac{2{,}304}{2\times36}=\alert{32\times}.
+        \frac{E}{2K}=\frac{2304}{2\times36}=\alert{32\times}.
       \]
     \end{column}
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium Target batch}\NvidiaTightRule{.6pt}\vspace{.08in}
       \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r@{}}
-        Local metadata, $T=8{,}192$ & Size \\
+        Local metadata, $T=8192$ & Size \\
         \midrule
         Byte $[T,E]$ & 18.9 MB \\
         int16 $[T,K]$ & 0.59 MB
@@ -560,7 +561,7 @@ if constexpr (IndexType == int16_t)
       existing format, while dense-route callers receive $[T,K]$ indices directly from the
       fused selection result.
       \vspace{.10in}
-      \small $E=2{,}304$ is safely representable in int16.
+      \small $E=2304$ is safely representable in int16.
     \end{column}
   \end{columns}
 \end{frame}
@@ -624,13 +625,13 @@ for (int k = lane_id; k < topk; k += 32) {
 
 \NvidiaPlotSlide
   {Router Stages}
-  {Matched B300 trace-back: 65,536 tokens, 2,304 experts, top-$k=36$, softmax}
+  {Matched B300 trace-back: 65536 tokens, 2304 experts, top-$k=36$, softmax}
   {assets/generated/router_pr_progression.pdf}
   {data/trace-back-comparisons; TE PRs \#2821, \#3012, \#3129}
 
 \NvidiaPlotSlide
   {Secondary Gains}
-  {Incremental 8,192-token result for the target 2,304/36 shape}
+  {Incremental 8192-token result for the target 2304/36 shape}
   {assets/generated/router_p3r_stages.pdf}
   {incremental router-optimization records; effective bandwidth, B300}
 
@@ -808,7 +809,7 @@ if local_mask & (1 << expert):
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Combine Configuration}{Tuned for 2,304 experts and validated at EP72}
+\begin{frame}[fragile]{Combine Configuration}{Tuned for 2304 experts and validated at EP72}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.50\textwidth}
@@ -915,7 +916,7 @@ validate the selected tuple in the EP72 launch
 
 \NvidiaPlotSlide
   {Microbenchmarks}
-  {B300 NVL8, H=512, 8,192 tokens/rank, local-E=32, top-$k=36$}
+  {B300 NVL8, H=512, 8192 tokens/rank, local-E=32, top-$k=36$}
   {assets/generated/hybrid_ep_microbench.pdf}
   {notes/hybrid-ep-sparse-opt-new.md; tuned reference vs tuned sparse path}
 
@@ -1089,11 +1090,11 @@ else:
     &
     {\NvidiaSansMedium\fontsize{18}{21}\selectfont 1.84$\times$}\newline
       {\small HybridEP API total}\newline
-      {\scriptsize\color{NvidiaGray}1,133.7 $\rightarrow$ 617.1 $\mu$s}
+      {\scriptsize\color{NvidiaGray}1133.7 $\rightarrow$ 617.1 $\mu$s}
     &
     {\NvidiaSansMedium\fontsize{18}{21}\selectfont 419.7}\newline
       {\small full-model TFLOP/s/GPU}\newline
-      {\scriptsize\color{NvidiaGray}2,304 experts / EP72}
+      {\scriptsize\color{NvidiaGray}2304 experts / EP72}
   \end{tabularx}
 \end{frame}
 
@@ -1117,7 +1118,7 @@ else:
   \end{tabularx}
 \end{frame}
 
-\begin{frame}{Router Timings}{65,536 tokens, 2,304 experts, top-$k=36$, softmax}
+\begin{frame}{Router Timings}{65536 tokens, 2304 experts, top-$k=36$, softmax}
   \NvidiaSource{\texttt{data/trace-back-comparisons/router\_benchmark\_combined.csv}}
   \renewcommand{\arraystretch}{1.23}
   \begin{tabularx}{\textwidth}{@{}>{\NvidiaSansMedium}X r r r@{}}
