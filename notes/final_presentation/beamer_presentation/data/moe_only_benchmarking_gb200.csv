@@ -1,0 +1,8 @@
+model,no_tune,optimized
+Nemotron 3 Ultra proxy,1340.7,1446.7
+Qwen3.5 397B EP64 proxy,536.1,629.3
+Qwen3.5 397B sparser proxy,511.0,653.2
+Qwen3.5 sparser 40B,74.4,166.1
+Qwen3-Next 2304E,46.6,172.4
+Qwen3-Next 2048E,56.3,174.5
+Kimi K3 QB MoE,1158.0,1170.3

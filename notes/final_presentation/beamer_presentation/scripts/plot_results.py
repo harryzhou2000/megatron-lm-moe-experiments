@@ -303,9 +303,9 @@ def hybrid_ep_microbench() -> None:
     save(fig, "hybrid_ep_microbench")
 
 
-def full_model_stages() -> None:
-    """Plot the staged OCI-AGA GB300 full-model sweep."""
-    data = pd.read_csv(DATA / "full_model_stages.csv")
+def full_model_stages_for_system(input_name: str, output_name: str) -> None:
+    """Plot one staged full-model sweep with the shared scale and stage ordering."""
+    data = pd.read_csv(DATA / input_name)
     stages = list(dict.fromkeys(data["stage"]))
     models = list(dict.fromkeys(data["model"]))
     x = np.arange(len(stages))
@@ -331,12 +331,18 @@ def full_model_stages() -> None:
     for group in bars:
         add_bar_labels(ax, group, fmt="{:.0f}", pad_fraction=0.012)
     fig.tight_layout()
-    save(fig, "full_model_stages")
+    save(fig, output_name)
 
 
-def moe_only_matrix() -> None:
-    """Plot the canonical 160-iteration MoE-only matrix."""
-    data = pd.read_csv(DATA / "moe_only_matrix.csv")
+def full_model_stages() -> None:
+    """Plot matched Lyris GB200 and OCI-AGA GB300 staged full-model sweeps."""
+    full_model_stages_for_system("full_model_stages_gb200.csv", "full_model_stages_gb200")
+    full_model_stages_for_system("full_model_stages.csv", "full_model_stages")
+
+
+def moe_only_benchmarking_for_system(input_name: str, output_name: str) -> None:
+    """Plot one matched MoE-only benchmark sweep."""
+    data = pd.read_csv(DATA / input_name)
     y = np.arange(len(data))
     height = 0.34
     fig, ax = plt.subplots(figsize=(11.2, 5.0))
@@ -351,7 +357,13 @@ def moe_only_matrix() -> None:
     ax.set_xlabel("Median TFLOP/s/GPU")
     ax.set_xlim(0, 1770)
     clean_axes(ax, grid_axis="x")
-    ax.legend(frameon=False, ncol=2, loc="lower right")
+    ax.legend(
+        frameon=False,
+        ncol=2,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.01),
+        columnspacing=2.2,
+    )
     for bars in [no_tune, optimized]:
         for bar in bars:
             value = bar.get_width()
@@ -375,8 +387,16 @@ def moe_only_matrix() -> None:
             fontweight="bold",
             color=DARK_GREEN,
         )
-    fig.tight_layout()
-    save(fig, "moe_only_matrix")
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    save(fig, output_name)
+
+
+def moe_only_benchmarking() -> None:
+    """Plot matched Lyris GB200 and OCI-AGA GB300 MoE-only benchmark sweeps."""
+    moe_only_benchmarking_for_system(
+        "moe_only_benchmarking_gb200.csv", "moe_only_benchmarking_gb200"
+    )
+    moe_only_benchmarking_for_system("moe_only_matrix.csv", "moe_only_benchmarking_gb300")
 
 
 def main() -> None:
@@ -386,7 +406,7 @@ def main() -> None:
     router_roof_reference()
     hybrid_ep_microbench()
     full_model_stages()
-    moe_only_matrix()
+    moe_only_benchmarking()
     print(f"Wrote plots to {OUT}")
 
 

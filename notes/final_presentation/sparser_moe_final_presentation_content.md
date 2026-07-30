@@ -37,7 +37,7 @@ The presentation should separate three kinds of numbers:
 - **Historical snapshots:** successive measurements as the software stack evolved. These
   show the investigation trajectory, but they are not a clean additive waterfall.
 
-Use median post-warmup TFLOP/s/GPU for the later end-to-end model comparisons. Do not add
+Use median TFLOP/s/GPU for the later end-to-end model comparisons. Do not add
 individual kernel speedups to predict training speedup: kernels overlap, different phases
 reuse metadata differently, and the critical path moves after each fix.
 
@@ -766,6 +766,12 @@ probability per selected expert route.
 
 NCU showed a structural push-versus-pull asymmetry:
 
+On the Dispatch vs. Combine slide, state explicitly that the displayed bandwidth and stall
+metrics are from NCU profiling. The lower prose should connect the counters to the mechanism:
+dispatch issues asynchronous S2G writes and is backpressure-limited with almost no barriers;
+combine pays G2S request/response latency, reduction synchronization, and output stores. This
+explains the measured throughput gap and why fused combine+unpermute serializes consumers.
+
 | Metric | Dispatch | Combine |
 | --- | ---: | ---: |
 | Duration | `116.83 us` | `254.43 us` |
@@ -918,6 +924,21 @@ Therefore:
 
 ## 16. Generalization: matched end-to-end model benchmarks
 
+For the staged full-model slide pair, place **Lyris GB200 first** and **OCI-AGA GB300
+second**.  Use the same five stages and median TFLOP/s/GPU axis for both pages:
+
+| System | Shape | No tune / no radix | Tuned HybridEP | Router #2821 | Router #3012 | Full sparse stack |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Lyris GB200 | 2304E / EP72 | 125.3 | 134.7 | 214.9 | 225.7 | 403.7 |
+| Lyris GB200 | 2048E / EP64 | 159.4 | 175.5 | 244.5 | 255.2 | 421.0 |
+| OCI-AGA GB300 | 2304E / EP72 | 127.2 | 137.1 | 219.9 | 230.8 | 419.7 |
+| OCI-AGA GB300 | 2048E / EP64 | 162.2 | 178.3 | 249.9 | 261.4 | 435.1 |
+
+The values are full-model 1F1B, paged-stash, full-iteration-graph wgrad-fix medians;
+the GB200 data are the Lyris records dated 2026-07-29 and GB300 data dated 2026-07-30.
+The separate Full-Model Throughput summary slide is omitted: the paired stage plots are
+the canonical presentation of these results.
+
 The June `hepS2F2` stack combined:
 
 - TE PR #3012 and dense route output;
@@ -951,6 +972,18 @@ benefit, but less dramatically.
 ---
 
 ## 17. Later MoE-module benchmark: broader shape coverage
+
+The deck begins this benchmark subsection with a configuration table covering $H$,
+$H_{\mathrm{latent}}$, routed-expert $H_{\mathrm{hid}}$, shared experts, $E$, and $K$ for
+every plotted model. It then gives two matched MoE-only benchmark charts: **GB200 NVL72
+first**, followed by **GB300 NVL72**. Both report median TFLOP/s/GPU and use the same
+horizontal scale. Slides use hardware/topology labels rather than cluster names.
+
+Include the Kimi entry as **Kimi K3 QB MoE**, not as a complete K3 model. It is a 12-layer
+standalone MoE mock with K3 routed/shared-expert dimensions and complete K3 MoE implementations
+of SiTU-GLU activation, quantile balancing, and latent up-projection normalization. MCore does
+not construct the other K3 components. Its improvement is marginal but positive: `1158 -> 1170`
+on Lyris GB200 and `1232 -> 1246` on OCI-AGA GB300, each about `1.01x`.
 
 The July benchmark measured `160/160` MoE-module performance iterations with full-iteration
 CUDA graph and paged stash, without 1f1b. It is not a full-model training benchmark.

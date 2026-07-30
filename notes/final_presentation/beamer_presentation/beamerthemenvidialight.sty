@@ -145,7 +145,20 @@
     \begin{tikzpicture}[remember picture,overlay]
       \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{assets/nvidia-transition-background.jpg}};
       \node[anchor=north west,text=NvidiaBlack,text width=.56\paperwidth,align=left]
-        at ([xshift=3.05in,yshift=-.20in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{21}{24}\selectfont #2};
+        at ([xshift=3.05in,yshift=-.55in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{21}{24}\selectfont #2};
+    \end{tikzpicture}
+  \end{frame}%
+}
+
+\newcommand{\NvidiaClosingSlide}[3]{%
+  \begin{frame}[plain]
+    \hypertarget{#1}{}
+    \begin{tikzpicture}[remember picture,overlay]
+      \node[anchor=center,inner sep=0] at (current page.center) {\includegraphics[width=\paperwidth,height=\paperheight]{assets/nvidia-transition-background.jpg}};
+      \node[anchor=north west,text=NvidiaBlack,text width=.56\paperwidth,align=left]
+        at ([xshift=3.05in,yshift=-.55in]current page.north west) {\raggedright\hyphenpenalty=10000\NvidiaSansMedium\fontsize{21}{24}\selectfont #2};
+      \node[anchor=north west,text=NvidiaCharcoal,text width=.50\paperwidth,align=left]
+        at ([xshift=3.07in,yshift=-1.10in]current page.north west) {\raggedright\fontsize{10.5}{13}\selectfont #3};
     \end{tikzpicture}
   \end{frame}%
 }

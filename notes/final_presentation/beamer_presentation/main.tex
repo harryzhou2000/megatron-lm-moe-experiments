@@ -183,7 +183,7 @@
   \end{minipage}\hfill
   \begin{minipage}[t]{.55\textwidth}
     {\NvidiaSansMedium Recipe}\NvidiaTightRule[.28\linewidth]{.6pt}\vspace{.025in}
-    \fontsize{8.5}{10}\selectfont 4K tokens; NV72 systems (GB200 / GB300).\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont 4K tokens; GB200 NVL72 and GB300 NVL72.\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont 1F1B; paged stash; full-iteration CUDA graph.
   \end{minipage}
@@ -933,7 +933,7 @@ while (mask) {
   \end{columns}
 \end{frame}
 
-\begin{frame}{Dispatch vs. Combine}{Dispatch is asynchronous; combine synchronizes, reduces, and stores}
+\begin{frame}{Dispatch vs. Combine}{NCU kernel profile: push versus pull, reduction, and synchronization}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.45\textwidth}
@@ -954,10 +954,14 @@ while (mask) {
       \small 15\% barrier stall
     \end{column}
   \end{columns}
-  \vspace{.10in}
-  {\NvidiaSansMedium\color{NvidiaGreen}Separate combine and unpermute}\par
-  \small Fusing them serializes the consumer behind slowly produced chunks, yielding about 14\%
-  lower effective throughput than the standalone path.
+  \vspace{.08in}
+  {\NvidiaSansMedium\color{NvidiaGreen}Findings from NCU}\par
+  {\fontsize{8.5}{10.2}\selectfont\setlength{\parskip}{0pt}\noindent
+  Dispatch issues S2G writes and continues; its long-scoreboard stall is TMA/NVLink backpressure,
+  with almost no inter-warp synchronization. Combine must wait for G2S request/response traffic,
+  synchronize reduction warps, and store the accumulated output. The resulting wait and barrier
+  stalls explain the $2.4\times$ throughput gap; fusing unpermute then serializes consumers behind
+  slowly produced chunks and is about 14\% slower than the standalone path.\par}
 \end{frame}
 
 \NvidiaPlotSlide
@@ -1117,16 +1121,23 @@ else:
 
 \NvidiaPlotSlide
   {Full-Model Stages}
-  {OCI-AGA GB300, 1F1B + paged stash + full-iteration graph; median after warmup 5}
+  {GB200 NVL72; 1F1B, paged stash, full-iteration graph; median TFLOP/s/GPU}
+  {assets/generated/full_model_stages_gb200.pdf}
+  {qwen3\_next\_2606\_image\_sweep\_20260728; wgrad-fix runs, 2026-07-29}
+
+\NvidiaPlotSlide
+  {Full-Model Stages}
+  {GB300 NVL72; 1F1B, paged stash, full-iteration graph; median TFLOP/s/GPU}
   {assets/generated/full_model_stages.pdf}
   {qwen3\_next\_2606\_image\_sweep\_20260728; wgrad-fix runs, 2026-07-30}
 
+% Omitted from the current main deck: the paired stage plots convey the full-model result.
+\iffalse
 \begin{frame}{Full-Model Throughput}{Cross-layer optimization: router, compact routes, sparse preprocessing, bitsets, and tuned combine}
   \NvidiaSource{\texttt{qwen3\_next\_2606\_image\_sweep\_20260728/README.md}}
   \noindent
   \NvidiaMetric{419.7}{2304E / EP72 median TFLOP/s/GPU}{127.2 no-tune baseline; 3.30$\times$}\hfill
-  \NvidiaMetric{435.1}{2048E / EP64 median TFLOP/s/GPU}{162.2 no-tune baseline; 2.68$\times$}\hfill
-  \NvidiaMetric{530 / 423}{iterations observed}{2304E / 2048E full-stack runs}
+  \NvidiaMetric{435.1}{2048E / EP64 median TFLOP/s/GPU}{162.2 no-tune baseline; 2.68$\times$}
   \vspace{.14in}
   \begin{NvidiaEvidence}{Matched stack}
     Both shapes use the same 26.06 image family, mock data, MBS 3, 24 layers, full 1F1B,
@@ -1134,24 +1145,60 @@ else:
     GroupedMLP wgrad subpath. Isolated kernel speedups are not added together.
   \end{NvidiaEvidence}
 \end{frame}
+\fi
+
+\begin{frame}{Benchmark Shapes}{MoE dimensions in the matched MoE-only suite}
+  \small Common protocol: mock data, MoE-only frontend, full-iteration CUDA graph, and paged
+  stash. $H_{\mathrm{hid}}$ is the routed-expert intermediate width; an em dash denotes no latent
+  projection.
+  \vspace{.07in}
+  {\renewcommand{\arraystretch}{1.12}
+  \fontsize{7.15}{8.6}\selectfont
+  \begin{tabularx}{.99\textwidth}{@{}>{\NvidiaSansMedium\raggedright\arraybackslash}X r r r >{\raggedright\arraybackslash}p{1.08in} r r@{}}
+    \toprule
+    Model & $H$ & $H_{\mathrm{latent}}$ & $H_{\mathrm{hid}}$ & Shared expert(s) & $E$ & $K$ \\
+    \midrule
+    Nemotron 3 Ultra proxy & 8192 & 2048 & 5120 & 1 $\times$ 10240 & 512 & 22 \\
+    Qwen3.5 397B EP64 proxy & 4096 & -- & 1024 & 1 $\times$ 1024 & 512 & 10 \\
+    Qwen3.5 397B sparser proxy & 4096 & -- & 1024 & 1 $\times$ 1024 & 1024 & 16 \\
+    Qwen3.5 sparser 40B & 2048 & 512 & 512 & 1 $\times$ 512 & 1152 & 18 \\
+    Qwen3-Next 2304E & 2048 & 512 & 512 & 1 $\times$ 512 & 2304 & 36 \\
+    Qwen3-Next 2048E & 2048 & 512 & 512 & 1 $\times$ 512 & 2048 & 32 \\
+    Kimi K3 QB MoE\textsuperscript{1} & 7168 & 3584 & 3072 & 2 $\times$ 3072 & 896 & 16 \\
+    \bottomrule
+  \end{tabularx}}
+  \vspace{.06in}
+  {\fontsize{7.0}{8.4}\selectfont\raggedright
+  \textsuperscript{1} Standalone 12-layer QB MoE mock: K3's SiTU-GLU activation, quantile
+  balancing, and latent up-projection normalization are implemented; MCore does not provide the
+  other K3 components.\par}
+\end{frame}
 
 \NvidiaPlotSlide
-  {MoE-Only Matrix}
-  {OCI-AGA GB300; 155 post-warmup iterations; matched full graph + paged stash}
-  {assets/generated/moe_only_matrix.pdf}
+  {MoE-Only Benchmarking}
+  {GB200 NVL72; matched full graph + paged stash; median TFLOP/s/GPU}
+  {assets/generated/moe_only_benchmarking_gb200.pdf}
   {moe\_perf\_canonical\_matrix\_20260730; median TFLOP/s/GPU}
 
-\begin{frame}{MoE-Only Scaling}{Generalization across wide, sparse expert shapes}
+\NvidiaPlotSlide
+  {MoE-Only Benchmarking}
+  {GB300 NVL72; matched full graph + paged stash; median TFLOP/s/GPU}
+  {assets/generated/moe_only_benchmarking_gb300.pdf}
+  {moe\_perf\_canonical\_matrix\_20260730; median TFLOP/s/GPU}
+
+\begin{frame}{MoE-Only Takeaways}{Generalization across wide, sparse expert shapes}
   \NvidiaSource{\texttt{moe\_perf\_canonical\_matrix\_20260730/README.md}}
   \noindent
   \NvidiaMetric{3.77$\times$}{Qwen3-Next 2304E}{47.2 $\rightarrow$ 177.9}\hfill
   \NvidiaMetric{3.13$\times$}{Qwen3-Next 2048E}{57.4 $\rightarrow$ 179.4}\hfill
   \NvidiaMetric{2.24$\times$}{Qwen3.5 sparser 40B}{76.1 $\rightarrow$ 170.3}
   \vspace{.16in}
-  \begin{NvidiaEvidence}{Limiting case}
+  \begin{NvidiaEvidence}{Limiting cases}
     Nemotron's proxy shape improved only 1.09$\times$: when expert compute is already large,
     router and sparse communication are a smaller fraction of the module.
-    This matrix is MoE-only, without 1F1B; full graph and paged stash are matched.
+    Kimi K3 QB MoE was also marginal: 1158 $\rightarrow$ 1170 TFLOP/s/GPU on GB200 and
+    1232 $\rightarrow$ 1246 on GB300 (about 1.01$\times$). This is MoE-only, without 1F1B;
+    full graph and paged stash are matched.
   \end{NvidiaEvidence}
 \end{frame}
 
@@ -1165,7 +1212,8 @@ else:
         \item Compact int16 routes reduce logical metadata 32$\times$.
         \item Ballot skips inactive local experts.
         \item Combine performance requires coordinated queue, group, and batch tuning.
-        \item Gains generalize most strongly to sparse, wide expert shapes.
+        \item The stack is most effective when $E$ and/or $K$ are large and routed-expert
+          $H_{\mathrm{hid}}$ is sufficiently small.
       \end{itemize}
     \end{column}
     \begin{column}{.46\textwidth}
@@ -1283,6 +1331,6 @@ else:
 \fi
 \fi
 
-\NvidiaTransitionSlide{section-discussion}{Discussion}
+\NvidiaClosingSlide{section-discussion}{Thank You}{Questions and discussion are welcome.}
 
 \end{document}
