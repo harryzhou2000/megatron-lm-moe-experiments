@@ -140,33 +140,33 @@
 \NvidiaTransitionSlide{section-target-workload}{Target Workload}
 \NvidiaSectionToc{Target Workload}
 
-\begin{frame}{Target Configuration}{The 2,304-expert test exposes costs that are not visible in the public 512-expert configuration}
-  \NvidiaSource{\href{https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct/blob/main/config.json}{Qwen3-Next config};
-    local recipe: \texttt{qwen3\_next\_sparser.yaml}}
+\begin{frame}{Experimental Configuration}{A Qwen3-Next-derived latent-MoE training model isolates large-expert sparse-path costs}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.57\textwidth}
+    \begin{column}{.58\textwidth}
       \fontsize{9}{11}\selectfont
-      \renewcommand{\arraystretch}{1.24}
-      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}l r r@{}}
+      \renewcommand{\arraystretch}{1.18}
+      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}p{.28\linewidth}X@{}}
         \toprule
-        Dimension & Public 80B & 2,304E test \\
+        Component & Target configuration \\
         \midrule
-        Routed experts & 512 & 2,304 \\
-        Selected experts & 10 & 36 \\
-        MoE intermediate & 512 & 512 \\
-        Expert parallelism & -- & 72 \\
-        Local experts/rank & -- & 32 \\
-        Layers & 48 & 24 \\
+        Backbone & 24 layers; hidden size $H=2{,}048$ \\
+        Attention & GQA only: 32 query heads / 2 KV groups; GDN disabled for benchmark stability \\
+        Latent MoE & $2{,}304$ routed experts; top-$k=36$; $H_{\mathrm{latent}}=512$ \\
+        Expert MLP & Routed FFN width $512$; shared-expert intermediate width $512$ \\
+        EP layout & EP72; 32 local experts per rank \\
         \bottomrule
       \end{tabularx}
     \end{column}
-    \begin{column}{.37\textwidth}
+    \begin{column}{.36\textwidth}
       \noindent\NvidiaMiniMetric{4.5$\times$}{router-score count}{512 $\rightarrow$ 2,304 experts}\hfill
       \NvidiaMiniMetric{3.6$\times$}{selected-route count}{10 $\rightarrow$ 36}
-      \vspace{.12in}
-      {\NvidiaSansMedium Runtime envelope}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
-      \small TP1 / PP1 / EP72, MBS 3, GBS 864, MXFP8, 1F1B, full-iteration CUDA graph.
+      \vspace{.07in}
+      {\NvidiaSansMedium Recipe}\par
+      \vspace{.02in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.035in}
+      \fontsize{8.5}{10.5}\selectfont
+      4K-token training; NV72 systems (GB200 / GB300).\par\vspace{.035in}
+      TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.035in}
+      1F1B; paged stash; full-iteration CUDA graph.
     \end{column}
   \end{columns}
 \end{frame}
