@@ -141,33 +141,41 @@
 \NvidiaSectionToc{Target Workload}
 
 \begin{frame}{Experimental Configuration}{A Qwen3-Next-derived latent-MoE training model isolates large-expert sparse-path costs}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.58\textwidth}
-      \fontsize{9}{11}\selectfont
-      \renewcommand{\arraystretch}{1.18}
-      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}p{.28\linewidth}X@{}}
-        \toprule
-        Component & Target configuration \\
-        \midrule
-        Backbone & 24 layers; hidden size $H=2{,}048$ \\
-        Attention & GQA only: 32 query heads / 2 KV groups; GDN disabled for benchmark stability \\
-        Latent MoE & $2{,}304$ routed experts; top-$k=36$; $H_{\mathrm{latent}}=512$ \\
-        Expert MLP & Routed FFN width $512$; shared-expert intermediate width $512$ \\
-        EP layout & EP72; 32 local experts per rank \\
-        \bottomrule
-      \end{tabularx}
-    \end{column}
-    \begin{column}{.36\textwidth}
-      \noindent\NvidiaMiniMetric{4.5$\times$}{router-score count}{512 $\rightarrow$ 2,304 experts}\hfill
-      \NvidiaMiniMetric{3.6$\times$}{selected-route count}{10 $\rightarrow$ 36}
-      \vspace{.07in}
-      {\NvidiaSansMedium Recipe}\hfill{\color{NvidiaGreen}\rule{.58\linewidth}{.6pt}}\par\vspace{.035in}
-      \fontsize{8.5}{10.5}\selectfont
-      4K-token training; NV72 systems (GB200 / GB300).\par\vspace{.035in}
-      TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.035in}
-      1F1B; paged stash; full-iteration CUDA graph.
-    \end{column}
-  \end{columns}
+  \noindent
+  \begin{minipage}[t]{.46\textwidth}
+    {\NvidiaSansMedium Backbone \& Attention}\par\vspace{.015in}
+    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    \fontsize{8.5}{10}\selectfont 24 layers; $H=2{,}048$\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont GQA: 32 Q / 2 KV groups; GDN disabled
+  \end{minipage}
+  \hfill
+  \begin{minipage}[t]{.46\textwidth}
+    {\NvidiaSansMedium Latent MoE}\par\vspace{.015in}
+    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    \fontsize{8.5}{10}\selectfont $2{,}304$ experts; top-$k=36$; $H_{\mathrm{latent}}=512$\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont FFN/shared width $512$; EP72; 32 E/rank
+  \end{minipage}
+  \par\vspace{.07in}
+  {\color{NvidiaRuleGray}\rule{\linewidth}{.4pt}}\par\vspace{.05in}
+  \begin{minipage}[t]{.39\textwidth}
+    \begin{minipage}[t]{.47\linewidth}
+      {\fontsize{16}{18}\selectfont\NvidiaSansMedium 4.5$\times$}\par
+      \fontsize{8.5}{10}\selectfont router scores\par
+      \fontsize{8}{9.5}\selectfont 512 $\rightarrow$ 2,304
+    \end{minipage}\hfill
+    \begin{minipage}[t]{.47\linewidth}
+      {\fontsize{16}{18}\selectfont\NvidiaSansMedium 3.6$\times$}\par
+      \fontsize{8.5}{10}\selectfont selected routes\par
+      \fontsize{8}{9.5}\selectfont 10 $\rightarrow$ 36
+    \end{minipage}
+  \end{minipage}\hfill
+  \begin{minipage}[t]{.55\textwidth}
+    {\NvidiaSansMedium Recipe}\par\vspace{.015in}
+    {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
+    \fontsize{8.5}{10}\selectfont 4K tokens; NV72 systems (GB200 / GB300).\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.02in}
+    \fontsize{8.5}{10}\selectfont 1F1B; paged stash; full-iteration CUDA graph.
+  \end{minipage}
 \end{frame}
 
 \section{Initial Analysis}
