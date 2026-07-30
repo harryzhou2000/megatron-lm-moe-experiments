@@ -143,14 +143,14 @@
 \begin{frame}{Experimental Configuration}{A Qwen3-Next-derived latent-MoE training model isolates large-expert sparse-path costs}
   \noindent
   \begin{minipage}[t]{.46\textwidth}
-    {\NvidiaSansMedium Backbone \& Attention}\par\vspace{.015in}
+    {\NvidiaSansMedium Backbone \& Attention}\par\vspace{-.06in}
     {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
     \fontsize{8.5}{10}\selectfont 24 layers; $H=2{,}048$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont GQA: 32 Q / 2 KV groups; GDN disabled
   \end{minipage}
   \hfill
   \begin{minipage}[t]{.46\textwidth}
-    {\NvidiaSansMedium Latent MoE}\par\vspace{.015in}
+    {\NvidiaSansMedium Latent MoE}\par\vspace{-.06in}
     {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
     \fontsize{8.5}{10}\selectfont $2{,}304$ experts; top-$k=36$; $H_{\mathrm{latent}}=512$\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont FFN/shared width $512$; EP72; 32 E/rank
@@ -170,7 +170,7 @@
     \end{minipage}
   \end{minipage}\hfill
   \begin{minipage}[t]{.55\textwidth}
-    {\NvidiaSansMedium Recipe}\par\vspace{.015in}
+    {\NvidiaSansMedium Recipe}\par\vspace{-.06in}
     {\color{NvidiaGreen}\rule{.28\linewidth}{.6pt}}\par\vspace{.025in}
     \fontsize{8.5}{10}\selectfont 4K tokens; NV72 systems (GB200 / GB300).\par\vspace{.02in}
     \fontsize{8.5}{10}\selectfont TP1 / PP1 / EP72; MBS 3 / GBS 864; MXFP8.\par\vspace{.02in}
