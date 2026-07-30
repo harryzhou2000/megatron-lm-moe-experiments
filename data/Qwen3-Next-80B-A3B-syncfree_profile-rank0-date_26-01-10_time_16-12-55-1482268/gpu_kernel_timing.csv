@@ -1,0 +1,7 @@
+category,launches,total_gpu_ms,mean_kernel_us
+Fused router,1728,3947.499,2284.43
+Grouped GEMM (expert MLP),1728,286.147,165.59
+Other GEMM,7236,371.136,51.29
+Attention (Flash),1152,903.899,784.63
+HybridEP dispatch,576,1259.542,2186.71
+HybridEP combine,576,1713.859,2975.45

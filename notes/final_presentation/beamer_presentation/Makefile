@@ -12,6 +12,7 @@ all:
 plots:
 	mkdir -p /tmp/moe-presentation-cache/matplotlib /tmp/moe-presentation-cache/fontconfig
 	XDG_CACHE_HOME=/tmp/moe-presentation-cache MPLCONFIGDIR=/tmp/moe-presentation-cache/matplotlib $(PYTHON) scripts/plot_results.py
+	XDG_CACHE_HOME=/tmp/moe-presentation-cache MPLCONFIGDIR=/tmp/moe-presentation-cache/matplotlib $(PYTHON) scripts/plot_router_trace_shapes.py
 
 watch:
 	$(LATEXMK) -pvc -$(ENGINE) -interaction=nonstopmode -outdir=$(BUILD) $(MAIN)

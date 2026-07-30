@@ -159,25 +159,29 @@ benefit.
 
 ---
 
-## 4. First profile: data movement had overtaken expert compute
+## 4. Initial profile: router and HybridEP dominated the captured GPU time
 
-An early forward-pass timeline for the target recorded:
+The rank-0 Nsight Systems report
+`Qwen3-Next-80B-A3B-syncfree_profile-rank0-date_26-01-10_time_16-12-55-1482268.nsys-rep`
+was exported to SQLite and classified in
+`data/Qwen3-Next-80B-A3B-syncfree_profile-rank0-date_26-01-10_time_16-12-55-1482268/`.
+Summed GPU execution time over all captured forward and backward launches was:
 
-| Forward component | Time |
+| Kernel group | GPU time |
 | --- | ---: |
-| Attention | `3.1 ms` |
-| HybridEP dispatch | `9.7 ms` |
-| Expert MLP | `1.1 ms` |
-| HybridEP combine | `2.5 ms` |
+| Fused router | `3947.499 ms` |
+| HybridEP combine | `1713.859 ms` |
+| HybridEP dispatch | `1259.542 ms` |
+| FlashAttention | `903.899 ms` |
+| Other GEMM | `371.136 ms` |
+| Grouped GEMM (expert MLP) | `286.147 ms` |
 
-The communication path was more than an order of magnitude larger than the expert MLP in
-that snapshot. A separate early estimate put:
+The fused router was `13.8x` the grouped expert-MLP time, while HybridEP combine plus
+dispatch was `10.4x`. These are aggregate GPU-time counters, not a single-forward timeline
+or additive wall-clock time: the capture contains forward and backward work on overlapping
+streams.
 
-- routing-map all-gather at `2.063 ms` versus an idealized `~1.5 ms` bandwidth lower bound;
-- HybridEP dispatch at `3.4 ms` versus an idealized `~0.15 ms` payload-only lower bound.
-
-These are diagnostic snapshots, not final measurements. Their value is that they made the
-optimization order clear:
+The profile established the optimization order:
 
 ```text
 profile whole iteration
@@ -191,6 +195,14 @@ profile whole iteration
 
 **Speaker takeaway:** The optimization process followed the moving bottleneck. Fixing the
 router exposed HybridEP; fixing dispatch exposed scan and combine.
+
+### Launch-overhead baseline
+
+Most launch-overhead reduction was upstream execution-system work: CuTe DSL sync-free
+grouped GEMM and fused GroupedMLP, paged stash, full-iteration CUDA graphs, fused
+quantization kernels, and larger microbatches where memory permits. The router and HybridEP
+work in this presentation builds on that replayable baseline rather than claiming those
+upstream gains as its own.
 
 ---
 

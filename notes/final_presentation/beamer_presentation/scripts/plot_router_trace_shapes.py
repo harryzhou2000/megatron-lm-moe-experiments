@@ -109,7 +109,7 @@ def main() -> None:
     data = load_measurements(data_dir)
     for kernel, test_pass in PLOTS:
         for score_function in SCORE_FUNCTIONS:
-            output = output_dir / f"trace_{kernel}_{test_pass}_{score_function}.png"
+            output = output_dir / f"trace_{kernel}_{test_pass}_{score_function}.pdf"
             plot_one(data, kernel, test_pass, score_function, output)
             print(output)
 

@@ -107,13 +107,15 @@
 
 \setbeamertemplate{footline}{%
   \leavevmode\hbox{%
-    \begin{beamercolorbox}[wd=.18\paperwidth,ht=0.18in,dp=0.08in,leftskip=.14in]{footline}%
+    % Keep the section label on the same .38in grid as frame titles; the page
+    % number occupies only the otherwise empty gutter to its left.
+    \begin{beamercolorbox}[wd=.38in,ht=0.18in,dp=0.08in,leftskip=.14in]{footline}%
       \ifNvidiaShowPageNumber\insertframenumber\fi
     \end{beamercolorbox}%
-    \begin{beamercolorbox}[wd=.60\paperwidth,ht=0.18in,dp=0.08in,center]{footline}%
-      \insertNvidiaSource\ifx\insertNvidiaSource\empty\else\hspace{1.1em}\fi\NvidiaFooterText
+    \begin{beamercolorbox}[wd=\dimexpr\paperwidth-1.94in\relax,ht=0.18in,dp=0.08in]{footline}%
+      \NvidiaFooterText\ifblank{\insertsectionhead}{}{\hspace{.45em}-\hspace{.45em}\insertsectionhead}%
     \end{beamercolorbox}%
-    \begin{beamercolorbox}[wd=.22\paperwidth,ht=0.18in,dp=0.08in,rightskip=.14in plus1fil]{footline}%
+    \begin{beamercolorbox}[wd=1.56in,ht=0.18in,dp=0.08in,rightskip=.14in plus1fil]{footline}%
       \hfill\NvidiaWordmark
     \end{beamercolorbox}%
   }%

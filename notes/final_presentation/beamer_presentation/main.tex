@@ -3,12 +3,12 @@
 \usetheme{nvidialight}
 \usefonttheme[onlymath]{serif}
 
-\title{Sparser MoE\\Explorations}
+\title[Sparser MoE]{Sparser MoE\\Explorations}
 \subtitle{Router, communication, and systems co-design at 2304 experts}
 \author{Harry Zhou | Mentor: Robin Zhang}
 \date{Internship final presentation \enspace|\enspace July 2026}
 
-\NvidiaSetFooter{Sparser MoE optimization}
+\NvidiaSetFooter{\insertshorttitle}
 \NvidiaShowPageNumbers
 % Keep provenance in the source and appendix, not in every slide footer.
 \renewcommand{\NvidiaSource}[1]{}
@@ -35,6 +35,22 @@
     \includegraphics[width=.97\textwidth,height=3.15in,keepaspectratio]{#3}
   \end{frame}
 }
+\newcommand{\NvidiaRouterPerformanceSlide}[4]{%
+  \begin{frame}{Router Performance}{#1}
+    \NvidiaSource{#4}
+    \centering\vspace*{-.06in}
+    \includegraphics[width=.97\textwidth,height=2.30in,keepaspectratio]{#2}\par\vspace{-.01in}
+    \begin{minipage}{.94\textwidth}\scriptsize\raggedright\color{NvidiaCharcoal}#3\end{minipage}
+  \end{frame}
+}
+\newcommand{\NvidiaRouterTallPerformanceSlide}[4]{%
+  \begin{frame}{Router Performance}{#1}
+    \NvidiaSource{#4}
+    \centering\vspace*{-.10in}
+    \includegraphics[width=.97\textwidth,height=2.80in,keepaspectratio]{#2}\par\vspace{-.02in}
+    \begin{minipage}{.94\textwidth}\scriptsize\raggedright\color{NvidiaCharcoal}#3\end{minipage}
+  \end{frame}
+}
 \newcommand{\NvidiaTocEntry}[3]{%
   \ifnum\value{section}=#1\def\NvidiaTocColor{NvidiaGreen}\else\def\NvidiaTocColor{NvidiaGreen!20}\fi%
   \noindent\begin{tikzpicture}[baseline=(label.base)]
@@ -45,7 +61,7 @@
   \end{tikzpicture}\par\vspace{.07in}%
 }
 \newcommand{\NvidiaSectionToc}[1]{%
-  \begin{frame}{Presentation outline}{#1}
+  \begin{frame}{Contents}{#1}
     \vspace{.04in}
     \ifnum\value{section}<8
       \NvidiaTocEntry{1}{Introduction}{section-introduction}
@@ -177,60 +193,45 @@
 \NvidiaTransitionSlide{section-initial-analysis}{Initial Analysis}
 \NvidiaSectionToc{Initial Analysis}
 
-\begin{frame}{Initial Profile}{A historical snapshot exposed the critical path}
-  \NvidiaSource{Historical profile snapshot; final presentation content note}
+\begin{frame}{Initial Profile}{Rank-0 aggregate GPU time identifies the initial bottlenecks}
+  \NvidiaSource{Rank-0 Nsight Systems report; data/Qwen3-Next-80B-A3B-syncfree\_profile-rank0-date\_26-01-10\_time\_16-12-55-1482268}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.55\textwidth}
-      \renewcommand{\arraystretch}{1.28}
+    \begin{column}{.57\textwidth}
+      \renewcommand{\arraystretch}{1.20}
       \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r@{}}
         \toprule
-        Region & Time \\
+        Kernel group & GPU time \\
         \midrule
-        Attention & 3.1 ms \\
-        HybridEP dispatch & \alert{9.7 ms} \\
-        Expert MLP & 1.1 ms \\
-        HybridEP combine & 2.5 ms \\
+        Fused router & \alert{3947.5 ms} \\
+        HybridEP combine & \alert{1713.9 ms} \\
+        HybridEP dispatch & \alert{1259.5 ms} \\
+        FlashAttention & 903.9 ms \\
+        Other GEMM & 371.1 ms \\
+        Grouped GEMM (expert MLP) & 286.1 ms \\
         \bottomrule
       \end{tabularx}
     \end{column}
-    \begin{column}{.40\textwidth}
-      {\NvidiaSansMedium Principal bottlenecks}\NvidiaTightRule{.6pt}\vspace{.05in}
-      \begin{enumerate}
-        \item CPU launch overhead from many small kernels.
-        \item Fused-router degradation at large $E$ and $K$.
-        \item Communication and preprocessing overhead.
-      \end{enumerate}
+    \begin{column}{.37\textwidth}
+      {\NvidiaSansMedium Interpretation}\NvidiaTightRule{.6pt}\vspace{.03in}
+      \small
+      The fused router dominates grouped expert-MLP compute by \alert{13.8$\times$}.
+      HybridEP combine and dispatch together contribute \alert{10.4$\times$} the grouped-GEMM time.\par\vspace{.07in}
+      These sums cover all captured forward and backward launches. Stream overlap means they are not additive wall-clock time.
     \end{column}
   \end{columns}
   \vspace{.04in}
-  {\small\color{NvidiaGreen}\NvidiaSansMedium Eliminate launch overhead before analyzing
-  the replay-stable GPU critical path.}
+  {\small\color{NvidiaGreen}\NvidiaSansMedium First remove launch gaps; then optimize the router and the HybridEP path.}
 \end{frame}
 
-\begin{frame}[fragile]{Launch-Overhead Mitigation}{Make one iteration replayable, then optimize the remaining GPU bottlenecks}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.48\textwidth}
-      \begin{NvidiaCode}
-# capture once
-for microbatch in iteration:
-    route()
-    dispatch()
-    grouped_mlp()
-    combine()
-
-# replay without Python launch gaps
-cuda_graph.replay()
-      \end{NvidiaCode}
-    \end{column}
-    \begin{column}{.47\textwidth}
-      \begin{itemize}
-        \item Increase microbatch size where memory permits.
-        \item Capture the full iteration, not isolated kernels.
-        \item Use fused grouped MLP and related MoE kernels.
-        \item Fuse metadata and dispatcher preprocessing kernels.
-      \end{itemize}
-    \end{column}
-  \end{columns}
+\begin{frame}{Launch-Overhead Mitigation}{Upstream runtime work establishes the replayable baseline}
+  {\NvidiaSansMedium Most of the launch-overhead reduction comes from upstream execution-system work:}\par\vspace{.04in}
+  \begin{itemize}\small\setlength\itemsep{.06in}
+    \item CuTe DSL sync-free grouped GEMM and fused GroupedMLP reduce expert-MLP launches and synchronizations.
+    \item Paged stash makes activation storage capture-compatible.
+    \item Full-iteration CUDA graphs remove CPU launch gaps and stabilize replay.
+    \item Fused quantization removes remaining small-kernel work; larger microbatches amortize the residual.
+  \end{itemize}
+  {\small\color{NvidiaGreen}\NvidiaSansMedium This work targets the router and HybridEP bottlenecks on top of that baseline.}
 \end{frame}
 
 \section{Fused-Router Optimization}
@@ -595,92 +596,150 @@ for (int k = lane_id; k < topk; k += 32) {
   \end{columns}
 \end{frame}
 
-\begin{frame}{Router Bounds}{Optimistic limits contextualize the measured 254.5 $\mu$s result}
+\begin{frame}{Router SOL}{Parametric roofs for FP32 top-k forward}
   \NvidiaSource{\href{https://www.nvidia.com/en-us/data-center/hgx/}{NVIDIA HGX B300 specs};
     \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium HBM traffic floor}\NvidiaTightRule{.6pt}\vspace{.08in}
-      \small Semantic traffic is approximately 245 MB:
+      {\NvidiaSansMedium HBM traffic roof}\NvidiaTightRule{.6pt}\vspace{.08in}
+      \small B200 and B300 raw HBM rooflines are both 8 TB/s. The benchmark's minimum
+      global traffic is
       \[
-        245\text{ MB}/8\text{ TB/s}=\alert{30.7\,\mu\text{s}}.
+        B_{\mathrm{sparse}}=13TE,
+        \qquad B_{\mathrm{int16}}=12TE+2TK.
       \]
-      \small The measured kernel reaches about 12\% of raw HBM bandwidth.
-      \vspace{.08in}
-      {\scriptsize\color{NvidiaGray}Tensor bytes only; cache-line and instruction overhead are excluded.}
+      \small The terms are logits read, probability and FP32-intermediate writes, plus either
+      a dense bool map or $K$ int16 indices. Thus
+      \[
+        t_{\mathrm{HBM}}=B_{\mathrm{eff}}/(8\text{ TB/s}).
+      \]
+      \vspace{.025in}
+      {\scriptsize\color{NvidiaGray}\setlength{\baselineskip}{8.5pt}\selectfont
+        This is an effective-byte roof, not a measurement of physical HBM traffic.\par}
     \end{column}
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Compute-issue floor}\NvidiaTightRule{.6pt}\vspace{.08in}
-      \small Eight radix passes touch 151M scores:
+      {\NvidiaSansMedium Compute roof}\NvidiaTightRule{.6pt}\vspace{.08in}
+      \small $R_{\mathrm{issue}}$ is the sustained CUDA-core issue rate. Full forward work is
+      {\footnotesize
       \[
-        8\!\times\!8192\!\times\!2304=151\text{M}.
+        \begin{aligned}
+          W={}&TEI_{\mathrm{row}}+(8+G)TEI_{\mathrm{radix}}\\[-2pt]
+             &+TKI_{\mathrm{selected}},\qquad 1\leq G\leq2.
+        \end{aligned}
+      \]}
+      \scriptsize $I_{\mathrm{row}}$: score evaluation, initialization, full-row stores;
+      $I_{\mathrm{selected}}$: normalization and selected writes.\par
+      \vspace{.01in}
+      \[
+        t_{\mathrm{comp}}=W/R_{\mathrm{issue}},\qquad
+        BW_{\mathrm{comp,eq}}=B_{\mathrm{eff}}/t_{\mathrm{comp}}.
       \]
-      \small One FP32 op/visit at 75 TFLOP/s/GPU gives an impossible
-      \alert{$\sim2.0\,\mu$s} floor.
-      \vspace{.08in}
-      {\scriptsize\color{NvidiaGray}Masks, shifts, histograms, shuffles, scans, and dependencies remain.}
+      \vspace{.025in}
+      {\scriptsize\color{NvidiaGray}\setlength{\baselineskip}{8.5pt}\selectfont
+        FP32 TFLOP/s does not directly give $R_{\mathrm{issue}}$ for this integer/collective path;
+        dependencies further lower the achievable rate.\par}
     \end{column}
   \end{columns}
 \end{frame}
 
-\NvidiaPlotSlide
-  {Router Stages}
+\begin{frame}{SOL Examples}{Radix work and effective traffic scale together}
+  \NvidiaSource{\texttt{scripts/test\_fused\_topk.py};
+    \texttt{data/trace-back-comparisons/trace-back-3129-dense-int16-topk-forward.csv}}
+  \small Int16 dense output gives $B_{\mathrm{eff}}/T=12E+2K$ bytes. Radix selection scans
+  $(8+G)E$ scores/token; the table gives $\left(B_{\mathrm{eff}}/T\right)/\left((8+G)E\right)$.
+  \vspace{.02in}
+  \begin{center}
+    \begin{tabular}{lrrr}
+      \toprule
+      {\NvidiaSansMedium Shape $E/K$} & {\NvidiaSansMedium $B_{\mathrm{eff}}/T$} &
+      {\NvidiaSansMedium Radix scans$/T$} & {\NvidiaSansMedium Conversion factor} \\
+      \midrule
+      $512/16$ & $6.18$ KB & $4608$--$5120$ & $1.21$--$1.34$ B/scan \\
+      $896/16$ & $10.78$ KB & $8064$--$8960$ & $1.20$--$1.34$ B/scan \\
+      $2304/36$ & $27.72$ KB & $20736$--$23040$ & $1.20$--$1.34$ B/scan \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+  \vspace{.02in}
+  \scriptsize If hypothetical $R_{\mathrm{issue}}=75$ Tinst/s and $I_{\mathrm{radix}}=1$ are used,
+  the radix-only conversion is $90$--$100$ TB/s. Full-kernel score, normalization, and store work
+  lower the compute roof; this is a normalization, not a one-operation SOL.\par
+  \vspace{.03in}
+  \small\textcolor{NvidiaGreen}{\NvidiaSansMedium Observed forward bandwidth.}\par
+  \scriptsize B300, FP32 softmax, dense int16, $T=65536$,
+  \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{PR \#3129}:
+  $896/16=1000.5$ GB/s; $2304/36=956.8$ GB/s. Both are effective bandwidths, well below
+  the 8 TB/s HBM roof.
+\end{frame}
+
+\NvidiaRouterPerformanceSlide
   {Matched B300 trace-back: 65536 tokens, 2304 experts, top-$k=36$, softmax}
   {assets/generated/router_pr_progression.pdf}
+  {Radix selection removes the large-$K$ penalty; the following kernel and metadata changes retain
+   that gain through the final dense-routing implementation.}
   {data/trace-back-comparisons; TE PRs \#2821, \#3012, \#3129}
 
-\NvidiaPlotSlide
-  {Secondary Gains}
-  {Incremental 8192-token result for the target 2304/36 shape}
+\NvidiaRouterPerformanceSlide
+  {Incremental B300 result: 8192 tokens, 2304 experts, top-$k=36$, softmax}
   {assets/generated/router_p3r_stages.pdf}
+  {Loop fusion, asynchronous loading, packed radix state, static-score specialization, and the
+   merged head provide cumulative improvements across the top-$K$ and auxiliary-loss paths.}
   {incremental router-optimization records; effective bandwidth, B300}
 
-\NvidiaTallPlotSlide
-  {Top-k Forward}
-  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_topk_forward_softmax.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_topk_forward_softmax.pdf}
+  {The final dense-int16 output checkpoint sustains the forward gain across the measured shapes;
+   the absolute effective bandwidth rises with enough tokens to amortize launch overhead.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Top-k Forward}
-  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_topk_forward_sigmoid.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_topk_forward_sigmoid.pdf}
+  {The same selection and metadata improvements transfer to sigmoid scoring, while its score
+   computation changes the absolute bandwidth level relative to softmax.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Top-k Backward}
-  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_topk_backward_raw_softmax.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_topk_backward_raw_softmax.pdf}
+  {Selected-index routing eliminates redundant membership work in the top-$K$ backward path;
+   the resulting benefit is most visible at large expert counts.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Top-k Backward}
-  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_topk_backward_raw_sigmoid.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_topk_backward_raw_sigmoid.pdf}
+  {Backward gains persist for sigmoid because the selected-index traversal removes the same
+   full-row routing-map scan, independent of the score function.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Aux-loss Forward}
-  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_forward_softmax.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_forward_softmax.pdf}
+  {Auxiliary-loss forward shares the optimized loading and score-processing structure; gains
+   remain stable across the seven shape pairs as the token count grows.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Aux-loss Forward}
-  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_forward_sigmoid.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_forward_sigmoid.pdf}
+  {Sigmoid auxiliary-loss forward follows the same trend, with score-function arithmetic setting
+   the attainable effective bandwidth rather than changing the optimization direction.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Aux-loss Backward}
-  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_backward_raw_softmax.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_backward_raw_softmax.pdf}
+  {The backward kernel benefits from the optimized per-row reductions and reduced shared-memory
+   pressure, particularly once the persistent kernel has sufficient work.}
   {data/trace-back-comparisons}
 
-\NvidiaTallPlotSlide
-  {Aux-loss Backward}
-  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
-  {assets/generated/trace_aux_loss_backward_raw_sigmoid.png}
+\NvidiaRouterTallPerformanceSlide
+  {Single-B300 router benchmark: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_backward_raw_sigmoid.pdf}
+  {The sigmoid auxiliary-loss backward results show the same large-shape benefit while retaining
+   the complete score-function semantics.}
   {data/trace-back-comparisons}
 
 \section{HybridEP Optimization}
@@ -1139,6 +1198,8 @@ else:
   \end{NvidiaEvidence}
 \end{frame}
 
+% Sources slide retained for maintenance but intentionally excluded from the presentation.
+\iffalse
 \begin{frame}{Sources}{The presentation is reproducible from local measurements and official model sources}
   \fontsize{8.5}{10.5}\selectfont
   \renewcommand{\arraystretch}{1.20}
@@ -1163,6 +1224,7 @@ else:
     \bottomrule
   \end{tabularx}
 \end{frame}
+\fi
 
 \NvidiaTransitionSlide{section-discussion}{Discussion}
 

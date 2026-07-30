@@ -1,0 +1,2 @@
+category,launches,total_gpu_ms,mean_kernel_us
+Grouped GEMM (expert MLP),1728,286.147,165.59

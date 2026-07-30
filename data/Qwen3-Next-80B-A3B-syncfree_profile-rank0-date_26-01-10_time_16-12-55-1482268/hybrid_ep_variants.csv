@@ -1,0 +1,5 @@
+operation,template_bool,launches,total_gpu_ms,mean_kernel_us
+dispatch,false,288,273.982,951.33
+dispatch,true,288,985.560,3422.08
+combine,false,288,641.087,2226.00
+combine,true,288,1072.772,3724.90
