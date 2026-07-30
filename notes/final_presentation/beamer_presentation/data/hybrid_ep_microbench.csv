@@ -1,5 +1,5 @@
-metric,reference_us,optimized_us
-Permute kernel,396.1,92.7
-Unpermute kernel,269.5,131.8
-Dispatch + permute API,602.1,217.9
-Combine + unpermute API,531.6,399.2
+metric,before_gbs,after_gbs
+Permute,117.2,488.7
+Unpermute,172.6,350.6
+Dispatch,360.5,644.7
+Combine,69.5,264.5

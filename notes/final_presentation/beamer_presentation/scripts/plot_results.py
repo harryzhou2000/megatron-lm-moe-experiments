@@ -73,7 +73,6 @@ def clean_axes(ax: plt.Axes, *, grid_axis: str = "y") -> None:
 
 def save(fig: plt.Figure, name: str) -> None:
     fig.savefig(OUT / f"{name}.pdf", bbox_inches="tight", pad_inches=0.08)
-    fig.savefig(OUT / f"{name}.png", dpi=220, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
 
 
@@ -243,80 +242,65 @@ def router_roof_reference() -> None:
 
 
 def hybrid_ep_microbench() -> None:
-    """Plot ballot and tuned-pipeline gains from the controlled 8-GPU study."""
+    """Plot matched before/after effective payload throughput for HybridEP kernels."""
     data = pd.read_csv(DATA / "hybrid_ep_microbench.csv")
     x = np.arange(len(data))
     width = 0.34
     fig, ax = plt.subplots(figsize=(10.8, 4.4))
-    reference = ax.bar(
-        x - width / 2, data["reference_us"], width, color=GREEN, label="Reference"
+    before = ax.bar(
+        x - width / 2,
+        data["before_gbs"],
+        width,
+        color=GREEN,
+        label="Before",
     )
-    optimized = ax.bar(
-        x + width / 2, data["optimized_us"], width, color=DARK_GREEN, label="Optimized"
+    after = ax.bar(
+        x + width / 2,
+        data["after_gbs"],
+        width,
+        color=DARK_GREEN,
+        label="After",
     )
     ax.set_xticks(
         x,
         [
             "Permute",
             "Unpermute",
-            "Dispatch API",
-            "Combine API",
+            "Dispatch\n(kernel only)",
+            "Combine\n(kernel only)",
         ],
     )
-    ax.set_ylabel("Time (us, lower is better)")
-    ax.set_ylim(0, 700)
+    ax.set_ylabel("Effective bandwidth (GB/s, higher is better)")
+    ax.set_ylim(0, 740)
     clean_axes(ax)
-    ax.legend(frameon=False, ncol=2, loc="upper right")
-    add_bar_labels(ax, reference, fmt="{:.0f}")
-    add_bar_labels(ax, optimized, fmt="{:.0f}")
+    for bars in (before, after):
+        for bar in bars:
+            value = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                value + 7,
+                f"{value:.0f}",
+                ha="center",
+                va="bottom",
+                fontsize=9.2,
+                fontweight="bold",
+                color=CHARCOAL,
+            )
     for idx, row in data.iterrows():
-        gain = row["reference_us"] / row["optimized_us"]
+        gain = row["after_gbs"] / row["before_gbs"]
         ax.text(
-            idx + width / 2,
-            row["optimized_us"] + 42,
+            idx,
+            max(row["before_gbs"], row["after_gbs"]) + 31,
             f"{gain:.2f}×",
             ha="center",
             va="bottom",
-            fontsize=10.5,
+            fontsize=9.6,
             fontweight="bold",
             color=DARK_GREEN,
         )
+    ax.legend(frameon=False, ncol=2, loc="upper left")
     fig.tight_layout()
     save(fig, "hybrid_ep_microbench")
-
-
-def combine_tuning() -> None:
-    """Plot the controlled default-to-tuned combine comparison."""
-    data = pd.read_csv(DATA / "combine_tuning.csv")
-    x = np.arange(len(data))
-    width = 0.34
-    fig, ax = plt.subplots(figsize=(10.2, 4.2))
-    default = ax.bar(x - width / 2, data["default_us"], width, color=GREEN, label="Default")
-    tuned = ax.bar(x + width / 2, data["tuned_us"], width, color=DARK_GREEN, label="Tuned")
-    ax.set_xticks(
-        x,
-        ["Combine\nwith probs", "Combine\nwithout probs", "Combine +\nunpermute API"],
-    )
-    ax.set_ylabel("Time (us, lower is better)")
-    ax.set_ylim(0, 1300)
-    clean_axes(ax)
-    ax.legend(frameon=False, ncol=2, loc="upper right")
-    add_bar_labels(ax, default, fmt="{:.0f}")
-    add_bar_labels(ax, tuned, fmt="{:.0f}")
-    for idx, row in data.iterrows():
-        gain = row["default_us"] / row["tuned_us"]
-        ax.text(
-            idx + width / 2,
-            row["tuned_us"] + 75,
-            f"{gain:.1f}×",
-            ha="center",
-            va="bottom",
-            fontsize=11,
-            fontweight="bold",
-            color=DARK_GREEN,
-        )
-    fig.tight_layout()
-    save(fig, "combine_tuning")
 
 
 def full_model_stages() -> None:
@@ -401,7 +385,6 @@ def main() -> None:
     p3r_stages()
     router_roof_reference()
     hybrid_ep_microbench()
-    combine_tuning()
     full_model_stages()
     moe_only_matrix()
     print(f"Wrote plots to {OUT}")

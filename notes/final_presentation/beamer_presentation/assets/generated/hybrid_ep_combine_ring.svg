@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="470" viewBox="0 0 1600 470" role="img" aria-labelledby="title desc">
+  <title id="title">Single-NVLink-domain HybridEP combine kernel</title>
+  <desc id="desc">Two G2S producer warps pull peer expert outputs over NVLink into a shared-memory ring. Four reduction consumer warps accumulate the fan-in in FP32, then issue S2G writeback to local HBM.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#0074df"/></marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#952fc6"/></marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#ef9100"/></marker>
+    <style>
+      .title { font-family: Helvetica, Arial, sans-serif; font-weight: 700; fill: #333333; }
+      .body { font-family: Helvetica, Arial, sans-serif; fill: #4d4d4d; }
+      .small { font-family: Helvetica, Arial, sans-serif; fill: #767676; }
+      .mono { font-family: Menlo, Consolas, monospace; fill: #676767; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="470" fill="#ffffff"/>
+
+  <text x="42" y="34" class="title" font-size="27">combine_kernel: pull, reduce, then write back</text>
+  <text x="42" y="59" class="small" font-size="17">Single NVLink domain only. Two pipelines overlap peer G2S fetches with four-warp FP32 reductions.</text>
+
+  <rect x="42" y="118" width="194" height="87" rx="10" fill="#f7f7f7" stroke="#757575" stroke-width="2"/>
+  <text x="139" y="151" text-anchor="middle" class="title" font-size="22">Peer HBM</text>
+  <text x="139" y="178" text-anchor="middle" class="small" font-size="16">expert output buffers</text>
+
+  <rect x="278" y="96" width="382" height="119" rx="11" fill="#eaf4ff" stroke="#0074df" stroke-width="2.2"/>
+  <text x="469" y="133" text-anchor="middle" class="title" font-size="23">G2S producers</text>
+  <text x="469" y="156" text-anchor="middle" class="mono" font-size="12">inter_node_G2S_warp_group_device_function</text>
+  <text x="469" y="184" text-anchor="middle" class="body" font-size="17">2 warps; one per pipeline</text>
+  <text x="469" y="206" text-anchor="middle" class="small" font-size="16">NVLink pull: peer HBM -> shared memory</text>
+
+  <path d="M236 161 H268" fill="none" stroke="#0074df" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <path d="M660 192 H685" fill="none" stroke="#0074df" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+
+  <text x="1090" y="118" text-anchor="middle" class="title" font-size="22">G2S shared-memory ring (NUM_OF_STAGES_G2S)</text>
+  <text x="1090" y="140" text-anchor="middle" class="small" font-size="16">stages are partitioned across the two producer/consumer pipelines</text>
+  <rect x="670" y="148" width="896" height="87" rx="12" fill="none" stroke="#a6a6a6" stroke-width="2.2"/>
+  <g stroke-width="2">
+    <rect x="685" y="158" width="116" height="67" rx="8" fill="#eaf4ff" stroke="#0074df"/>
+    <rect x="810" y="158" width="116" height="67" rx="8" fill="#edf8df" stroke="#76b900"/>
+    <rect x="935" y="158" width="116" height="67" rx="8" fill="#f5ebfb" stroke="#952fc6"/>
+    <rect x="1060" y="158" width="116" height="67" rx="8" fill="#edf8df" stroke="#76b900"/>
+    <rect x="1185" y="158" width="116" height="67" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+    <rect x="1310" y="158" width="116" height="67" rx="8" fill="#eaf4ff" stroke="#0074df"/>
+    <rect x="1435" y="158" width="116" height="67" rx="8" fill="#edf8df" stroke="#76b900"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="743" y="187" class="title" font-size="15">G2S</text><text x="743" y="208" class="small" font-size="13">filling</text>
+    <text x="868" y="187" class="title" font-size="15">ready</text><text x="868" y="208" class="small" font-size="13">mbarrier</text>
+    <text x="993" y="187" class="title" font-size="15">reduce</text><text x="993" y="208" class="small" font-size="13">consumed</text>
+    <text x="1118" y="187" class="title" font-size="15">ready</text><text x="1118" y="208" class="small" font-size="13">mbarrier</text>
+    <text x="1243" y="187" class="title" font-size="15">free</text><text x="1243" y="208" class="small" font-size="13">reuse</text>
+    <text x="1368" y="187" class="title" font-size="15">G2S</text><text x="1368" y="208" class="small" font-size="13">filling</text>
+    <text x="1493" y="187" class="title" font-size="15">ready</text><text x="1493" y="208" class="small" font-size="13">mbarrier</text>
+  </g>
+
+  <rect x="530" y="257" width="925" height="88" rx="12" fill="#f5ebfb" stroke="#952fc6" stroke-width="2.2"/>
+  <text x="992" y="289" text-anchor="middle" class="title" font-size="23">Reduction consumers</text>
+  <text x="992" y="312" text-anchor="middle" class="mono" font-size="12">inter_node_red_warp_group_device_function</text>
+  <text x="992" y="334" text-anchor="middle" class="body" font-size="16">4 warps / 2 pipelines; wait for ready stage, reduce peer fan-in in FP32, then release it</text>
+  <path d="M868 225 V247" fill="none" stroke="#952fc6" stroke-width="2.5" marker-end="url(#arrow-purple)"/>
+
+  <text x="1002" y="373" text-anchor="middle" class="title" font-size="21">S2G shared-memory output ring</text>
+  <rect x="455" y="378" width="807" height="82" rx="12" fill="none" stroke="#a6a6a6" stroke-width="2.2"/>
+  <g stroke-width="2">
+    <rect x="470" y="388" width="122" height="62" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+    <rect x="601" y="388" width="122" height="62" rx="8" fill="#f5ebfb" stroke="#952fc6"/>
+    <rect x="732" y="388" width="122" height="62" rx="8" fill="#fff2df" stroke="#ef9100"/>
+    <rect x="863" y="388" width="122" height="62" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+    <rect x="994" y="388" width="122" height="62" rx="8" fill="#f5ebfb" stroke="#952fc6"/>
+    <rect x="1125" y="388" width="122" height="62" rx="8" fill="#fff2df" stroke="#ef9100"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="531" y="414" class="title" font-size="15">free</text><text x="531" y="434" class="small" font-size="13">slot</text>
+    <text x="662" y="414" class="title" font-size="15">reduced</text><text x="662" y="434" class="small" font-size="13">FP32 -> BF16</text>
+    <text x="793" y="414" class="title" font-size="15">S2G</text><text x="793" y="434" class="small" font-size="13">writeback</text>
+    <text x="924" y="414" class="title" font-size="15">free</text><text x="924" y="434" class="small" font-size="13">slot</text>
+    <text x="1055" y="414" class="title" font-size="15">reduced</text><text x="1055" y="434" class="small" font-size="13">FP32 -> BF16</text>
+    <text x="1186" y="414" class="title" font-size="15">S2G</text><text x="1186" y="434" class="small" font-size="13">writeback</text>
+  </g>
+  <path d="M662 345 V378" fill="none" stroke="#952fc6" stroke-width="2.5" marker-end="url(#arrow-purple)"/>
+  <rect x="1322" y="378" width="236" height="76" rx="10" fill="#f7f7f7" stroke="#757575" stroke-width="2"/>
+  <text x="1440" y="408" text-anchor="middle" class="title" font-size="22">Local HBM</text>
+  <text x="1440" y="434" text-anchor="middle" class="small" font-size="16">combined token output</text>
+  <path d="M1247 419 H1312" fill="none" stroke="#ef9100" stroke-width="2.5" marker-end="url(#arrow-orange)"/>
+</svg>

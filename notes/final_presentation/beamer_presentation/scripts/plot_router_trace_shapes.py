@@ -87,7 +87,7 @@ def plot_one(data: pd.DataFrame, kernel: str, test_pass: str, score_function: st
                 markersize=3.6,
                 label=checkpoint if col == 0 else None,
             )
-        ax.set_title(f"T={tokens:,}", fontsize=9)
+        ax.set_title(f"T={tokens}", fontsize=9)
         ax.set_xticks(x, SHAPES, rotation=35, ha="right", fontsize=7.5)
         ax.set_ylim(0, ymax)
         ax.grid(axis="y", alpha=0.25, linewidth=0.6)

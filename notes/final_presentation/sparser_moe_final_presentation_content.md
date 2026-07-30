@@ -395,6 +395,13 @@ metadata. It writes directly into the registered HybridEP buffers and avoids an 
 NCCL-buffer-to-PyTorch-tensor copy. A historical NVL8 session recorded it at about `15%`
 faster than NCCL for the tested routing-map collective.
 
+**Presentation scope:** The **Custom All-Gather** page is source-level only: show the
+`ag_nvl_tma_kernel` skeleton with mbarrier-tracked G2S `cp.async.bulk`, then S2G bulk copies to
+every IPC-mapped peer buffer. Explain four warp-owned, double-buffered 16 KB shared-memory
+pipelines. Do not show the historical `15%` number or claim a speedup over the legacy custom
+kernel: no like-for-like legacy-custom comparison is recorded. Scope the path to a single NVLink
+domain with 16-byte alignment; multi-node execution uses NCCL.
+
 Treat this as a supporting experimental result:
 
 - it validates that collective overhead remains visible after payload compression;
@@ -520,6 +527,29 @@ enough parallelism without the scheduling and coordination cost of 128 threads.
 | Permute, `H=7168` | `937 us` | `912 us` | parity |
 | Unpermute, `H=7168` | `1475 us` | `1098 us` | `1.34x` |
 
+### Presentation provenance
+
+The Ballot Permutation slide must identify the code as the optimized
+`permute_kernel<32>` from DeepEP commit `1c3989c`; commit `7ec3238` applies the corresponding
+ballot/`__ffs` traversal to `unpermute_kernel<32>`. For the controlled B200 NVL8
+`H=512`, `T=8192`, `E_local=32`, `K=36` run, the documented kernel times were `393.6 -> 94.4 us`
+(permute) and `267.3 -> 131.6 us` (unpermute). The slide's `117 -> 489 GB/s` and
+`173 -> 351 GB/s` are derived effective payload rates: the `46.137344 MB` modelled copy payload
+divided by those measured kernel times. They are not hardware-counter HBM bandwidth.
+
+Explain the wasted reference work directly: it assigns `128` threads per token, stages routing in
+shared memory, and serially tests all `32` local-expert slots. With about `4.5` active slots,
+roughly `86%` of slot checks, route loads, and branches are unnecessary. The optimized 32-thread
+permute path builds a warp ballot, uses `__ffs` to visit only selected entries, and gets the
+destination with `__shfl_sync`; unpermute uses the same traversal but gathers and accumulates.
+Tong Liu's later upstream [PR #625](https://github.com/deepseek-ai/DeepEP/pull/625), commit
+`17cfb81`, independently used an almost identical warp-ballot selected-route traversal for the
+standalone permute path; it was adopted after this implementation.
+
+The slide must make the execution scope explicit: these measurements and the selected production
+route use standalone **unfused** permute/unpermute. For the latent `H=512` workload, this path is
+faster than the fused alternative; do not present the ballot improvement as a fused-kernel gain.
+
 ### Speed-of-light check
 
 At `T=8192`, `H=512`, BF16, and `4.5` active copies/token:
@@ -547,10 +577,10 @@ balanced tuple for the H=512 pull-and-reduce pipeline.
 
 ### Validated parameter sets
 
-| Context | Combine SMs | G2S stages | S2G stages | Tokens/group | Reduce batch |
+| Context | Combine SMs | G2S stages | S2G stages | Tokens/group | Reduce batch (no-op) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Controlled B300 NVL8 microbenchmark | `32` | `64` | `8` | `2` | `16` |
-| Historical `E=2304`, `EP=72` launch | `32` | `72` | `8` | `2` | `72` |
+| Controlled B300 NVL8 microbenchmark | `32` | `64` | `8` | `2` | `1` |
+| Historical `E=2304`, `EP=72` launch | `32` | `72` | `8` | `2` | `1` |
 
 The second row is the tuned production-launch tuple found for the 2,304-expert case. The
 first row is the cleaner controlled experiment used to explain parameter sensitivity.
@@ -563,8 +593,10 @@ NUM_SMS_COMBINE=32
 NUM_OF_STAGES_G2S_COMBINE_API=64       # 72 in the EP72 launch
 NUM_OF_STAGES_S2G_COMBINE_API=8
 NUM_OF_TOKENS_PER_GROUP_COMBINE_API=2
-NUM_TOKENS_COMBINE_REDUCE_BATCH_COMBINE_API=16  # 72 in the EP72 launch
 ```
+
+`NUM_TOKENS_COMBINE_REDUCE_BATCH_COMBINE_API=1` is intentionally not a tuned setting. It
+preserves the original per-source waits, so the batching feature is a no-op in these configurations.
 
 ### How the parameters were found
 
@@ -607,6 +639,54 @@ reduction warp group:
     issue S2G TMA store
 ```
 
+### Combine Tuning slides
+
+Use three consecutive pages, all titled **Combine Tuning**. The first explains the single-NVL-domain
+backward-combine stage shapes and the shared-memory budget. At `H=512`, `E_local=32`, and
+`R=8`, a G2S stage holds a BF16 token (`512*2 B`), its selected probability slice (`32*4 B`),
+source-rank ID, two mbarriers, and a flag: about `1.17 KB`. An S2G stage holds a BF16 reduced
+token plus a complete local probability row (`32*8*4 B`): `2.00 KB`. Thus `G2S=64`, `S2G=8`
+uses about `91.5 KB`, below the approximately `227 KB` opt-in per-block shared-memory budget;
+the `10/2` default uses only about `15.8 KB`. This capacity allows 64 G2S and 8 S2G stage slots
+to remain in flight. With two data pipelines, that is 32 G2S and 4 S2G slots per pipeline; stage
+counts must be divisible by two. The second page compares single-NVL-domain defaults with the selected
+B200 settings: combine SMs `24 -> 32`, G2S stages `10 -> 64`, S2G stages `2 -> 8`, and tokens/group
+`4 -> 2`.
+
+The third page covers group size and only the before/after standalone combine-kernel throughput;
+remove the separate bar-plot page. Group 1 / 64 SMs yielded `265 GB/s`; group 2 / 32 SMs retained
+`263 GB/s` with 32 G2S and 4 S2G slots per pipeline; group 4 / 32 SMs reduced depth to 16/2 and
+fell to `133 GB/s`. The selected-probability default-to-tuned standalone combine kernel changed
+from about `69 GB/s` to `265 GB/s` (`3.8x`), corresponding to the documented `960.8 -> 252.3 us`
+measurement. Retain the tuned EP72 tuple as workload-specific: G2S 72, S2G 8, group 2, and 32
+combine SMs.
+
+The Microbenchmarks plot must use matched before/after kernel-only paths on the same B200 NVL8
+shape, not a probabilities-enabled versus probabilities-disabled ablation. Plot effective payload
+throughput as: permute `117 -> 489 GB/s` (ballot), unpermute `173 -> 351 GB/s` (ballot), dispatch
+`361 -> 645 GB/s` (probability-slice optimization), and combine `69 -> 265 GB/s` (pipeline
+tuning). Place one gain label above each bar pair and values inside the bars to prevent label
+overlap. The dispatch and combine paths must therefore show the complete before/after gain from
+the actual optimizations.
+
+### Single-NVL-domain warp specialization
+
+The diagrams in the HybridEP section describe only the one-NVLink-domain path (`NUM_OF_NODES=1`),
+not the multi-node/RDMA path.
+
+- **Dispatch:** one G2S producer warp TMA-loads local-HBM token entries into the shared-memory
+  `intra_node_token_buffer` ring. Three S2G consumer warps wait for a ready stage and issue
+  peer-HBM writes across NVLink. The stage mbarriers enforce producer-ready and consumer-release
+  ownership; dispatch does not reduce the entries.
+- **Combine:** two G2S producer warps, one per data pipeline, pull peer expert outputs from NVLink
+  into the G2S ring. Four reduction consumer warps are split across those two pipelines. They wait
+  on the ready barrier, accumulate the fan-in in FP32, place the result in the S2G ring, and an
+  elected reduction thread stores the output to local HBM. This adds pull round-trip latency plus
+  producer-to-consumer barriers to the critical path.
+
+The source retains legacy `inter_node_*` names for the cross-rank portion of the one-domain
+combine path; in these diagrams they refer only to peer GPUs inside the same NVLink domain.
+
 At `G2S=64` with two groups/pipelines, each pipeline gets `32` FIFO slots. With roughly
 eight source ranks per output token, it can prefetch about four tokens:
 
@@ -621,13 +701,13 @@ eight source ranks per output token, it can prefetch about four tokens:
 - **Group `4+`:** makes each FIFO too shallow to hide remote-read latency. Group `4` fell
   to about `133 GB/s`; larger groups were worse.
 - **G2S `64`:** already provides enough lookahead on NVL8. Doubling it to `128` changed
-  `246.1 us` to `245.0 us`, effectively no gain.
+  output throughput only from `271 GB/s` to `272 GB/s`, effectively no gain.
 - **Batch `16`:** covers the roughly eight rank-level source contributions in one reduction
   cycle on the controlled NVL8 shape and avoids extra barriers.
 - **S2G `8`:** provides store-side staging without taking shared memory away from the
   latency-critical G2S FIFO.
-- **EP72 tuple:** the measured launch used G2S `72` and reduce batch `72`, matching the wider
-  communication domain. It should be reported as the tuned 2,304-case setting rather than
+- **EP72 tuple:** the measured launch used G2S `72`, S2G `8`, group `2`, and 32 combine SMs. It
+  should be reported as the tuned 2,304-case setting rather than
   extrapolated from the NVL8 microbenchmark.
 
 ### Controlled tuning results
@@ -653,6 +733,32 @@ With both the sparse changes and tuned combine:
 **Speaker takeaway:** Stage count, grouping, and reduction batch form one pipeline design.
 Increasing any single knob in isolation can waste SMs or remove the FIFO headroom needed to
 hide NVLink latency.
+
+### Presentation reporting convention
+
+For HybridEP transport microbenchmarks, present effective bandwidth in `GB/s`, not elapsed
+microseconds. Use the probability-disabled rows only as an upper-bound ablation: in
+`hybrid_ep.cu`, `with_probs=false` leaves the probability pointers and output buffers unset and
+selects the non-probability API paths. Training retains selected probabilities for weighted
+activations and their gradients. The isolated dense-route scan is metadata/control-flow work, so
+report its speedup without inventing a payload bandwidth.
+
+Use metric typography at about `1.5x` the normal body size, never title-sized. On the Probability
+Transport slide, use unboxed prose blocks with the same heading-and-rule treatment as the other
+explanatory blocks. Make the code column narrower to provide enough space. Report the rank-slice
+reduction and the measured probability-enabled dispatch gain, rather than a synthetic
+with-probability versus no-probability comparison. State the 8-rank test shape: `H=512`, `K=36`,
+and `E_local=32` (`E=256` total). Compare payload sizes explicitly: the `H=512` BF16 token is
+`1024 B`; the old full `32*8` FP32 probability row is also `1024 B` per destination, while the
+new slice is `128 B`. For the EP72 target, the full `32*72` FP32 row would be `9216 B`, or `9x`
+the token. Show the kernel-side slice copies, not API plumbing: forward
+dispatch sends only the destination rank's `E_local` probability slice from a logical
+`[E_local * R]` row, and backward combine fetches only the matching source-rank slice. On NVL8
+this removes `8x` probability bytes per peer; at `EP=72`, up to `72x`. The historical eight-B300
+probability-enabled dispatch result was approximately `200 GB/s -> 600 GB/s` (`~3x`). Do not
+present a with-probability versus no-probability comparison on this slide: the displayed gain is
+from omitting rank-irrelevant probability slices. The local permute output still retains one scalar
+probability per selected expert route.
 
 ---
 
@@ -738,11 +844,20 @@ passed on the full eight-rank test.
 membership checks. A more aggressive warp-pruning loop was rejected because reductions,
 `ffs` control flow, and row initialization cost more than the skipped work.
 
+**Presentation placement and scope:** Put **Dense Routing Map Scan** immediately after the HybridEP
+**Microbenchmarks** page. Do not present a scan-speedup metric on this slide. State the `32x`
+logical routing-metadata reduction here: bool `[T,E]` to int16 `[T,K]`. Then show that the dense
+scan vector-loads each token's `topk_indices[T,K]` int16 global expert IDs, range-maps each selected
+ID to its node/rank, sets rank bitmasks, and derives local-expert masks and per-expert counts from
+the same selected IDs. Do not discuss route-map reconstruction. This is independent of Custom
+All-Gather and must not be framed as a collective optimization.
+
 ---
 
 ## 14. Negative results: profiling prevented attractive but wrong optimizations
 
-Keep this concise in the main talk; move detailed counters to the appendix.
+Use three short bullet lists in the main talk: mechanism, measured consequence, and the reason the
+path was rejected. Move detailed counters to the appendix.
 
 ### Direct dispatch into expert-contiguous output
 
@@ -769,6 +884,11 @@ set-bit iteration produced mixed results and regressions. The simpler rank bitse
 
 **Speaker takeaway:** A removed kernel is not automatically removed work. It may amplify
 remote traffic or move serialization into a harder-to-hide place.
+
+### Current deck exclusions
+
+The **Sparse Path** summary frame and the appendix are commented out of the current main deck.
+Their source remains in the Beamer file for later reuse.
 
 ---
 

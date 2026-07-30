@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="470" viewBox="0 0 1600 470" role="img" aria-labelledby="title desc">
+  <title id="title">Single-NVLink-domain HybridEP dispatch kernel</title>
+  <desc id="desc">One G2S producer warp loads token entries from local HBM into a shared-memory ring. Three S2G consumer warps send ready entries to peer HBM across NVLink.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#0074df"/></marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#ef9100"/></marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 1 L9 5 L0 9Z" fill="#76b900"/></marker>
+    <style>
+      .title { font-family: Helvetica, Arial, sans-serif; font-weight: 700; fill: #333333; }
+      .body { font-family: Helvetica, Arial, sans-serif; fill: #4d4d4d; }
+      .small { font-family: Helvetica, Arial, sans-serif; fill: #767676; }
+      .mono { font-family: Menlo, Consolas, monospace; fill: #676767; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="470" fill="#ffffff"/>
+
+  <text x="42" y="34" class="title" font-size="27">dispatch_kernel: one producer warp, three consumer warps</text>
+  <text x="42" y="59" class="small" font-size="17">Single NVLink domain only. One CTA streams token entries through a reusable shared-memory ring.</text>
+
+  <rect x="42" y="121" width="202" height="86" rx="10" fill="#f7f7f7" stroke="#757575" stroke-width="2"/>
+  <text x="143" y="154" text-anchor="middle" class="title" font-size="22">Local HBM</text>
+  <text x="143" y="181" text-anchor="middle" class="small" font-size="16">input tokens + probabilities</text>
+
+  <rect x="296" y="101" width="350" height="120" rx="11" fill="#eaf4ff" stroke="#0074df" stroke-width="2.2"/>
+  <text x="471" y="138" text-anchor="middle" class="title" font-size="23">G2S producer</text>
+  <text x="471" y="161" text-anchor="middle" class="mono" font-size="13">G2S_warp_group_device_function</text>
+  <text x="471" y="189" text-anchor="middle" class="body" font-size="17">1 warp; elected issuer</text>
+  <text x="471" y="211" text-anchor="middle" class="small" font-size="16">TMA: local HBM -> shared memory</text>
+
+  <rect x="954" y="101" width="380" height="120" rx="11" fill="#fff2df" stroke="#ef9100" stroke-width="2.2"/>
+  <text x="1144" y="138" text-anchor="middle" class="title" font-size="23">S2G consumers</text>
+  <text x="1144" y="161" text-anchor="middle" class="mono" font-size="13">S2G_warp_group_device_function</text>
+  <text x="1144" y="189" text-anchor="middle" class="body" font-size="17">3 warps; one issuer per warp</text>
+  <text x="1144" y="211" text-anchor="middle" class="small" font-size="16">TMA: shared memory -> peer HBM</text>
+
+  <rect x="1385" y="121" width="173" height="86" rx="10" fill="#f7f7f7" stroke="#757575" stroke-width="2"/>
+  <text x="1471" y="154" text-anchor="middle" class="title" font-size="22">Peer HBM</text>
+  <text x="1471" y="181" text-anchor="middle" class="small" font-size="16">expert input buffers</text>
+
+  <path d="M244 164 H286" fill="none" stroke="#0074df" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <path d="M471 221 V302" fill="none" stroke="#0074df" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <path d="M1019 302 V231" fill="none" stroke="#ef9100" stroke-width="2.5" marker-end="url(#arrow-orange)"/>
+  <path d="M1334 164 H1375" fill="none" stroke="#ef9100" stroke-width="2.5" marker-end="url(#arrow-orange)"/>
+
+  <text x="800" y="258" text-anchor="middle" class="title" font-size="24">Shared-memory token ring</text>
+
+  <rect x="252" y="284" width="1122" height="102" rx="13" fill="none" stroke="#a6a6a6" stroke-width="2.2"/>
+  <g stroke-width="2">
+    <rect x="270" y="300" width="128" height="70" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+    <rect x="407" y="300" width="128" height="70" rx="8" fill="#eaf4ff" stroke="#0074df"/>
+    <rect x="544" y="300" width="128" height="70" rx="8" fill="#edf8df" stroke="#76b900"/>
+    <rect x="681" y="300" width="128" height="70" rx="8" fill="#fff2df" stroke="#ef9100"/>
+    <rect x="818" y="300" width="128" height="70" rx="8" fill="#edf8df" stroke="#76b900"/>
+    <rect x="955" y="300" width="128" height="70" rx="8" fill="#fff2df" stroke="#ef9100"/>
+    <rect x="1092" y="300" width="128" height="70" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+    <rect x="1229" y="300" width="128" height="70" rx="8" fill="#f1f1f1" stroke="#a6a6a6"/>
+  </g>
+  <g text-anchor="middle">
+    <text x="334" y="329" class="title" font-size="16">free</text><text x="334" y="352" class="small" font-size="14">stage 0</text>
+    <text x="471" y="329" class="title" font-size="16">G2S fill</text><text x="471" y="352" class="small" font-size="14">TMA in flight</text>
+    <text x="608" y="329" class="title" font-size="16">ready</text><text x="608" y="352" class="small" font-size="14">mbarrier[0]</text>
+    <text x="745" y="329" class="title" font-size="16">S2G write</text><text x="745" y="352" class="small" font-size="14">in flight</text>
+    <text x="882" y="329" class="title" font-size="16">ready</text><text x="882" y="352" class="small" font-size="14">mbarrier[0]</text>
+    <text x="1019" y="329" class="title" font-size="16">S2G write</text><text x="1019" y="352" class="small" font-size="14">in flight</text>
+    <text x="1156" y="329" class="title" font-size="16">free</text><text x="1156" y="352" class="small" font-size="14">stage 6</text>
+    <text x="1293" y="329" class="title" font-size="16">free</text><text x="1293" y="352" class="small" font-size="14">stage 7</text>
+  </g>
+  <path d="M1357 335 C1430 335 1430 400 1293 400 H334 C198 400 198 335 260 335" fill="none" stroke="#76b900" stroke-width="2.2" stroke-dasharray="8 6" marker-end="url(#arrow-green)"/>
+  <text x="800" y="421" text-anchor="middle" class="small" font-size="16">S2G completion releases the stage through mbarrier[1]; the producer wraps and reuses it.</text>
+  <text x="42" y="454" class="small" font-size="15">Blue: G2S fill</text>
+  <text x="220" y="454" class="small" font-size="15">Green: ready for consumer</text>
+  <text x="490" y="454" class="small" font-size="15">Orange: S2G write in flight</text>
+  <text x="1558" y="454" text-anchor="end" class="small" font-size="15">Push path: no reduction.</text>
+</svg>

@@ -1,4 +1,4 @@
-metric,default_us,tuned_us
-Combine with probabilities,960.8,252.3
-Combine without probabilities,877.4,210.9
-Combine + unpermute API,1125.5,399.2
+configuration,throughput_gbs
+Group 1 / 64 SMs,265
+Group 2 / 32 SMs,263
+Group 4 / 32 SMs,133

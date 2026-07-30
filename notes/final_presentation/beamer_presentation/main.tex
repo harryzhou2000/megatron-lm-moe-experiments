@@ -16,7 +16,7 @@
 \newcommand{\LocalSource}[1]{\NvidiaSource{\texttt{#1}}}
 \newcommand{\NvidiaMiniMetric}[3]{%
   \begin{minipage}[t]{.47\linewidth}\raggedright
-    {\NvidiaSansMedium\fontsize{17}{20}\selectfont\color{NvidiaBlack}#1}\par
+    {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont\color{NvidiaBlack}#1}\par
     {\fontsize{8}{10}\selectfont\color{NvidiaCharcoal}#2}\par
     {\fontsize{7.5}{9}\selectfont\color{NvidiaGray}#3}
   \end{minipage}%
@@ -171,12 +171,12 @@
   {\color{NvidiaRuleGray}\rule{\linewidth}{.4pt}}\par\vspace{.05in}
   \begin{minipage}[t]{.39\textwidth}
     \begin{minipage}[t]{.47\linewidth}
-      {\fontsize{16}{18}\selectfont\NvidiaSansMedium 4.5$\times$}\par
+      {\fontsize{13}{15.5}\selectfont\NvidiaSansMedium 4.5$\times$}\par
       \fontsize{8.5}{10}\selectfont router scores\par
       \fontsize{8}{9.5}\selectfont 512 $\rightarrow$ 2304
     \end{minipage}\hfill
     \begin{minipage}[t]{.47\linewidth}
-      {\fontsize{16}{18}\selectfont\NvidiaSansMedium 3.6$\times$}\par
+      {\fontsize{13}{15.5}\selectfont\NvidiaSansMedium 3.6$\times$}\par
       \fontsize{8.5}{10}\selectfont selected routes\par
       \fontsize{8}{9.5}\selectfont 10 $\rightarrow$ 36
     \end{minipage}
@@ -751,171 +751,187 @@ for (int k = lane_id; k < topk; k += 32) {
   \includegraphics[width=.99\textwidth,height=3.20in,keepaspectratio]{assets/generated/hybrid_ep_pipeline.pdf}
 \end{frame}
 
-\begin{frame}[fragile]{Probability Transport}{Selected probabilities remain required for weighted activations and gradients}
-  \LocalSource{notes/hybrid\_ep\_rebased\_bw\_results.md}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.52\textwidth}
-      \begin{NvidiaCode}
-# keep mathematical state
-ids, weights = router(logits)
-
-# communicate only what this owner needs
-for route in selected_routes:
-    send(token[route], weights[route])
-
-# backward reuses the selected weights
-grad_logits = router_backward(ids, weights, grad)
-      \end{NvidiaCode}
-    \end{column}
-    \begin{column}{.43\textwidth}
-      \noindent\NvidiaMiniMetric{103.0 $\mu$s}{dispatch with probability payload}{controlled B300 NVL8}\hfill
-      \NvidiaMiniMetric{94.4 $\mu$s}{without prob payload}{+9\%}
-      \vspace{.12in}
-      \noindent\NvidiaMiniMetric{249.4 $\mu$s}{combine with probability payload}{pull + reduce}\hfill
-      \NvidiaMiniMetric{210.0 $\mu$s}{without prob payload}{+19\%}
-    \end{column}
-  \end{columns}
-  \vspace{.08in}
-  {\small\color{NvidiaGray}The ``without probability'' rows bound transport opportunity;
-  training still preserves selected weights and their backward dependencies.}
+\begin{frame}{Dispatch Pipeline}{Single NVLink domain: G2S producer and S2G consumer warps}
+  \centering
+  \includegraphics[width=.99\textwidth,height=3.18in,keepaspectratio]{assets/generated/hybrid_ep_dispatch_ring.pdf}
 \end{frame}
 
-\begin{frame}[fragile]{Ballot Permutation}{4.5 active local experts/token leave 86\% of slots empty}
-  \LocalSource{notes/permute\_unpermute\_optimization.md}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.54\textwidth}
-      \begin{NvidiaCode}[language=NvidiaCUDA]
-active = route_map[token * E_local + lane] > 0;
-mask = __ballot_sync(FULL_MASK, active);
+\begin{frame}{Combine Pipeline}{Single NVLink domain: G2S, reduction, and S2G writeback}
+  \centering
+  \includegraphics[width=.99\textwidth,height=3.18in,keepaspectratio]{assets/generated/hybrid_ep_combine_ring.pdf}
+\end{frame}
 
-while (mask) {
-    expert = __ffs(mask) - 1;
-    mask &= mask - 1;
-    peer = __shfl_sync(FULL_MASK, my_peer, expert);
-    move_selected_token(peer);
+\begin{frame}[fragile]{Probability Transport}{8 ranks; $H=512$; $K=36$; $E_{\mathrm{local}}=32$ ($E=256$ total)}
+  \LocalSource{notes/final_presentation/sparser\_moe\_final\_presentation\_content.md}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.45\textwidth}
+      \begin{NvidiaCode}[language=C++,basicstyle=\ttfamily\fontsize{5.6}{6.5}\selectfont]
+if constexpr (FORWARD_DISPATCH) {
+  auto remote = out_prob[r] + idx * E * R + r * E;
+  auto local  = &smem_prob[stage][r * E];
+  cp_async_bulk(remote, local, E * sizeof(float));
+}
+if constexpr (BACKWARD_COMBINE) {
+  auto remote = in_prob[s] + idx * E * R + s * E;
+  cp_async_bulk(local, remote, E * 4, barrier);
 }
       \end{NvidiaCode}
     \end{column}
-    \begin{column}{.40\textwidth}
-      \noindent\NvidiaMiniMetric{4.27$\times$}{permute}{396.1 $\rightarrow$ 92.7 $\mu$s}\hfill
-      \NvidiaMiniMetric{2.04$\times$}{unpermute}{269.5 $\rightarrow$ 131.8 $\mu$s}
-      \vspace{.22in}
-      {\NvidiaSansMedium\color{NvidiaGreen}Threading policy}\par
-      \small Use 32 threads/token at latent $H=512$. Larger hidden sizes retain wider
-      thread groups to expose memory-level parallelism.
+    \begin{column}{.50\textwidth}
+      {\NvidiaSansMedium Payload scale}\NvidiaTightRule{.6pt}\vspace{.04in}
+      \fontsize{8.1}{9.6}\selectfont\raggedright
+      Token: $H=512$ BF16 $=1024$ B. Full probability row: $32\mathbin{\times}8$ FP32
+      $=1024$ B/destination---the same as the token. At EP72: $9216$ B ($9\times$ token).\par\vspace{.045in}
+      {\NvidiaSansMedium Slice instead of row}\NvidiaTightRule{.6pt}\vspace{.04in}
+      Destination slice: $32$ FP32 $=128$ B. \textbf{$8\times$ less probability traffic on
+      NVL8}; up to \textbf{$72\times$ at EP72}.\par\vspace{.045in}
+      {\NvidiaSansMedium Measured dispatch gain}\NvidiaTightRule{.6pt}\vspace{.04in}
+      8-B300 selected-probability dispatch: \textbf{$\sim$200 GB/s} $\rightarrow$
+      \textbf{$\sim$600 GB/s} (\textbf{$\sim3\times$}). Selected scalars remain for
+      weighting and gradients; only rank-irrelevant slices are omitted.
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Dense Route Scans}{Build expert and rank membership once; use bit tests downstream}
-  \LocalSource{notes/isolated-scan-bench.md}
+\begin{frame}[fragile]{Ballot Permutation}{Standalone unfused path; B200 NVL8; $H=512$; $T=8192$; $E_{\mathrm{local}}=32$; $K=36$}
+  \LocalSource{notes/hybrid-ep-sparse-opt-new.md; DeepEP commits 1c3989c, 7ec3238}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.52\textwidth}
-      \begin{NvidiaCode}
-local_mask = 0
-rank_mask = 0
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6}{7.1}\selectfont]
+// permute_kernel<32>, DeepEP commit 1c3989c
+int my_dest = token_routing[lane_in_warp];
+unsigned mask = __ballot_sync(0xffffffff, my_dest > 0);
 
-for slot in range(K):
-    expert = dense_route[token, slot]
-    local_mask |= 1 << (expert % E_local)
-    rank_mask  |= 1 << owner_rank(expert)
-
-if local_mask & (1 << expert):
-    process_active_expert()
+while (mask) {
+  int expert = __ffs(mask) - 1;
+  mask &= mask - 1;
+  int dest = __shfl_sync(0xffffffff, my_dest, expert);
+  for (int j = group_lane; j < hidden_size_fp4; j += 32)
+    permuted_tokens_fp4[(dest - 1) * hidden_size_fp4 + j] =
+        tokens_fp4[token_id * hidden_size_fp4 + j];
+}
       \end{NvidiaCode}
     \end{column}
     \begin{column}{.42\textwidth}
-      {\NvidiaSansMedium\fontsize{22}{26}\selectfont 1.58$\times$}\par
-      {\small\color{NvidiaGreen}Isolated 512-thread scan}\par
-      \vspace{.08in}
-      {\NvidiaSansMedium\fontsize{15}{18}\selectfont
-        $525.6 \rightarrow 331.7\,\mu\text{s}$}\par
-      \vspace{.18in}
-      \small The scan consumes compact $[T,K]$ route IDs directly; bool route-map
-      reconstruction is unnecessary.\par
-      \vspace{.08in}
-      \scriptsize\color{NvidiaGray}No permute-fusion metadata is included in this isolated comparison.
+      \noindent\NvidiaMiniMetric{489 GB/s}{permute}{117 $\rightarrow$ 489 payload-model GB/s}\hfill
+      \NvidiaMiniMetric{351 GB/s}{unpermute}{173 $\rightarrow$ 351 payload-model GB/s}
+      \par\vspace{.05in}\noindent{\NvidiaSansMedium\color{NvidiaGreen}\fontsize{10}{12}\selectfont
+      What the ballot removes}\par\vspace{.02in}
+      {\fontsize{8}{9.3}\selectfont\setlength{\parskip}{0pt}\noindent
+      The reference assigns 128 threads/token and tests all 32 local-expert slots. Only about
+      4.5 are active, so 86\% of slot checks, route loads, and branches are unnecessary.\par}
+      \vspace{.035in}
+      {\fontsize{7.5}{8.8}\selectfont\setlength{\parskip}{0pt}\noindent
+      \textcolor{NvidiaGreen}{\NvidiaSansMedium Later upstream adoption.} Tong Liu's
+      \href{https://github.com/deepseek-ai/DeepEP/pull/625}{\#625} independently used an almost
+      identical warp-ballot selected-route traversal; it was adopted after this path.\par}
+      \vspace{.025in}
+      {\fontsize{7.5}{8.8}\selectfont\setlength{\parskip}{0pt}\noindent
+      \textcolor{NvidiaGreen}{\NvidiaSansMedium Scope.} At $H=512$, standalone unfused
+      permute/unpermute outperforms fused. \texttt{unpermute\_kernel<32>} (\texttt{7ec3238})
+      uses the same gather/accumulate traversal.\par}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}[fragile]{Combine Configuration}{Tuned for 2304 experts and validated at EP72}
+\begin{frame}[fragile]{Combine Tuning}{Stage shape and shared-memory budget; B200 NVL8, $H=512$, $E_{\mathrm{local}}=32$, $R=8$}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.50\textwidth}
-      \begin{NvidiaCode}
-for group in [1, 2, 4, 8]:
-    for pull_depth, reduce_batch in candidates:
-        time(combine)
-        time(combine + unpermute)
-        verify_correctness()
-
-select shallowest queue that hides pull latency
-validate the selected tuple in the EP72 launch
-      \end{NvidiaCode}
+    \begin{column}{.47\textwidth}
+      {\NvidiaSansMedium G2S and S2G stage shapes}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.0}{9.2}\selectfont\setlength{\abovedisplayskip}{.025in}\setlength{\belowdisplayskip}{.025in}
+      G2S holds one BF16 expert-output token, the source rank, a selected-probability slice, and
+      producer/consumer state:
+      \[
+        B_{\mathrm{G2S}} = 512\cdot2 + 32\cdot4 + 2\cdot8 + 4 + 1
+        \simeq 1.17\ \mathrm{KB}.
+      \]
+      S2G holds one BF16 reduced token and the complete local probability row for backward:
+      \[
+        B_{\mathrm{S2G}} = 512\cdot2 + (32\cdot8)\cdot4 = 2.00\ \mathrm{KB}.
+      \]\par}
     \end{column}
-    \begin{column}{.46\textwidth}
-      \fontsize{9}{11}\selectfont
-      \renewcommand{\arraystretch}{1.18}
-      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r r@{}}
+    \begin{column}{.47\textwidth}
+      {\NvidiaSansMedium Capacity for in-flight work}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.0}{9.2}\selectfont\setlength{\abovedisplayskip}{.025in}\setlength{\belowdisplayskip}{.025in}
+      The tuned $64/8$ allocation uses
+      \[
+        64\cdot1.17\ \mathrm{KB} + 8\cdot2.00\ \mathrm{KB}
+        \simeq 91.5\ \mathrm{KB},
+      \]
+      below the approximately $227$ KB opt-in shared-memory limit; the default $10/2$ uses about
+      $15.8$ KB. This capacity keeps $64$ G2S and $8$ S2G entries in flight.\par}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Combine Tuning}{Default and tuned B200 settings}
+  \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.62\textwidth}
+      {\NvidiaSansMedium Single-NVL-domain configuration}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\renewcommand{\arraystretch}{1.28}
+      \begin{tabularx}{\linewidth}{@{}>{\ttfamily\fontsize{5.6}{6.8}\selectfont\arraybackslash}X r r@{}}
         \toprule
-        Parameter & NVL8 study & 2304E / EP72 \\
+        \multicolumn{1}{@{}l}{\NvidiaSansMedium Environment variable} &
+        \multicolumn{1}{c}{\NvidiaSansMedium Default} &
+        \multicolumn{1}{r@{}}{\NvidiaSansMedium Tuned} \\
         \midrule
-        Combine SMs & 32 & 32 \\
-        G2S stages & 64 & \alert{72} \\
-        S2G stages & 8 & 8 \\
-        Tokens/group & 2 & 2 \\
-        Reduce batch & 16 & \alert{72} \\
+        NUM\_SMS\_COMBINE & 24 & 32 \\
+        NUM\_OF\_STAGES\_G2S\_COMBINE\_API & 10 & 64 \\
+        NUM\_OF\_STAGES\_S2G\_COMBINE\_API & 2 & 8 \\
+        NUM\_OF\_TOKENS\_PER\_GROUP\_COMBINE\_API & 4 & 2 \\
         \bottomrule
-      \end{tabularx}
-      \vspace{.08in}
-      {\small\color{NvidiaGray}The EP72 tuple matches the wider communication domain; neither tuple is universal.}
+      \end{tabularx}\par}
+    \end{column}
+    \begin{column}{.32\textwidth}
+      {\NvidiaSansMedium Per-pipeline allocation}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.5}{10}\selectfont\setlength{\parskip}{0pt}\noindent
+      Two pipelines divide the rings into 32 G2S and 4 S2G stages per pipeline. Both stage counts
+      must be divisible by two.\par}
+      \vspace{.13in}
+      {\NvidiaSansMedium Selection}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.5}{10}\selectfont\setlength{\parskip}{0pt}\noindent
+      Group 2 keeps two pipelines active while retaining sufficient G2S lookahead.\par}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}{Combine Pipeline}{Group 2 balances parallelism with FIFO lookahead}
+\begin{frame}{Combine Tuning}{Group allocation and kernel throughput}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
-  \centering
-  \begin{columns}[c,onlytextwidth]
-    \begin{column}{.20\textwidth}\centering
-      {\NvidiaSansMedium G2S fetch}\par\scriptsize Remote TMA reads
-    \end{column}
-    \begin{column}{.05\textwidth}\centering\color{NvidiaGreen}\Large$\rightarrow$\end{column}
-    \begin{column}{.20\textwidth}\centering
-      {\NvidiaSansMedium Shared FIFO}\par\scriptsize 32 slots/pipeline
-    \end{column}
-    \begin{column}{.05\textwidth}\centering\color{NvidiaGreen}\Large$\rightarrow$\end{column}
-    \begin{column}{.20\textwidth}\centering
-      {\NvidiaSansMedium Reduction}\par\scriptsize FP32 accumulation
-    \end{column}
-    \begin{column}{.05\textwidth}\centering\color{NvidiaGreen}\Large$\rightarrow$\end{column}
-    \begin{column}{.20\textwidth}\centering
-      {\NvidiaSansMedium S2G store}\par\scriptsize Write result
-    \end{column}
-  \end{columns}
-  \vspace{.28in}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}Lookahead}\par
-      \small $32$ FIFO slots / $\sim8$ source ranks $\approx4$ prefetched tokens.
+    \begin{column}{.53\textwidth}
+      {\NvidiaSansMedium Group-size effect}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\renewcommand{\arraystretch}{1.13}
+      \fontsize{8.2}{9.8}\selectfont
+      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}l c c r@{}}
+        \toprule
+        Group & G2S/pipe & S2G/pipe & Throughput \\
+        \midrule
+        1, 64 SMs & 64 & 8 & 265 GB/s \\
+        2, 32 SMs & 32 & 4 & 263 GB/s \\
+        4, 32 SMs & 16 & 2 & 133 GB/s \\
+        \bottomrule
+      \end{tabularx}\par}
+      \vspace{.08in}
+      {\fontsize{8.5}{10.0}\selectfont\setlength{\parskip}{0pt}\noindent
+      Group 1 leaves a pipeline underused. Group 2 uses both pipelines and retains enough G2S
+      lookahead for the same throughput with half as many SMs. Group 4 halves the FIFO again and
+      no longer hides remote-read latency.\par}
     \end{column}
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}Saturation}\par
-      \small G2S 64 $\rightarrow$ 128 changes 246.1 to 245.0 $\mu$s.
-    \end{column}
-    \begin{column}{.31\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}SM allocation}\par
-      \small Group 2 matches group 1 throughput with 32 rather than 64 SMs.
+    \begin{column}{.41\textwidth}
+      {\NvidiaSansMedium Combine kernel result}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 69 GB/s $\rightarrow$ 265 GB/s}\par
+      {\fontsize{8}{9.5}\selectfont\setlength{\parskip}{0pt}\noindent
+      default \hfill tuned, selected probabilities\par}
+      \vspace{.10in}
+      {\fontsize{8.5}{10.0}\selectfont\setlength{\parskip}{0pt}\noindent
+      The tuned standalone combine kernel improves output throughput by \textbf{$3.8\times$}. It
+      uses a group of two and 32 combine SMs. The EP72 workload-specific tuple uses G2S 72,
+      S2G 8, group 2, and 32 SMs.\par}
     \end{column}
   \end{columns}
 \end{frame}
-
-\NvidiaPlotSlide
-  {Combine Tuning}
-  {Controlled H=512, local-E=32, top-$k=36$ comparison}
-  {assets/generated/combine_tuning.pdf}
-  {notes/hybrid-ep-sparse-opt-new.md; controlled B200 comparison}
 
 \begin{frame}{Dispatch vs. Combine}{Dispatch is asynchronous; combine synchronizes, reduces, and stores}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
@@ -923,8 +939,8 @@ validate the selected tuple in the EP72 launch
     \begin{column}{.45\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}Dispatch / push}\par
       \vspace{.05in}
-      {\NvidiaSansMedium\fontsize{25}{29}\selectfont 116.8\,$\mu$s}\par
-      \small 650 GB/s\par
+      {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 650 GB/s}\par
+      \small 72\% of 900 GB/s NVLink peak\par
       \small 58\% long-scoreboard stall\par
       \small 0.05\% barrier stall
     \end{column}
@@ -932,45 +948,96 @@ validate the selected tuple in the EP72 launch
     \begin{column}{.45\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}Combine / pull + reduce}\par
       \vspace{.05in}
-      {\NvidiaSansMedium\fontsize{25}{29}\selectfont 254.4\,$\mu$s}\par
-      \small 271 GB/s\par
+      {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 271 GB/s}\par
+      \small 30\% of 900 GB/s NVLink peak\par
       \small 27\% long-scoreboard + 26\% wait\par
       \small 15\% barrier stall
     \end{column}
   \end{columns}
   \vspace{.10in}
   {\NvidiaSansMedium\color{NvidiaGreen}Separate combine and unpermute}\par
-  \small Fusing them serializes the consumer behind slowly produced chunks: 434 $\mu$s fused
-  versus 381 $\mu$s standalone, about 14\% slower.
+  \small Fusing them serializes the consumer behind slowly produced chunks, yielding about 14\%
+  lower effective throughput than the standalone path.
 \end{frame}
 
 \NvidiaPlotSlide
   {Microbenchmarks}
-  {B300 NVL8, H=512, 8192 tokens/rank, local-E=32, top-$k=36$}
+  {B200 NVL8, H=512, T=8192/rank, local-E=32, top-$k=36$; matched kernel-only throughput}
   {assets/generated/hybrid_ep_microbench.pdf}
-  {notes/hybrid-ep-sparse-opt-new.md; tuned reference vs tuned sparse path}
+  {notes/hybrid-ep-sparse-opt-new.md; ballot, probability-slice, and combine-tuning comparisons}
 
-\begin{frame}{Custom All-Gather}{Direct registered-buffer writes reduce intermediate copies}
-  \LocalSource{notes/final\_presentation/sparser\_moe\_final\_presentation\_content.md}
+\begin{frame}[fragile]{Dense Routing Map Scan}{Selected expert IDs directly form rank and local-expert metadata}
+  \LocalSource{DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.44\textwidth}
-      \noindent\NvidiaMiniMetric{$\sim$15\%}{historical isolated gain}{custom all-gather vs NCCL}\hfill
-      \NvidiaMiniMetric{32$\times$}{logical metadata reduction}{bool $[T,E]$ to int16 $[T,K]$}
+    \begin{column}{.55\textwidth}
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.1}{7.2}\selectfont]
+const int16_t* ids_in = input_topk_idx + token_id * TOPK;
+const copy_t* src = reinterpret_cast<const copy_t*>(ids_in);
+int16_t topk_ids[TOPK];
+
+#pragma unroll
+for (int j = 0; j < ROUTING_MAP_LOAD_ITER; ++j)
+  *(reinterpret_cast<copy_t*>(topk_ids) + j) = src[j];
+
+#pragma unroll
+for (int k = 0; k < TOPK; ++k) {
+  int expert = static_cast<int>(topk_ids[k]);
+  if (node_begin <= expert && expert < node_end) {
+    int rank = (expert - node_begin) / E_local;
+    rank_mask[rank / 32] |= 1u << (rank % 32);
+  }
+}
+      \end{NvidiaCode}
     \end{column}
-    \begin{column}{.51\textwidth}
-      {\NvidiaSansMedium\color{NvidiaGreen}When it applies}\par
+    \begin{column}{.40\textwidth}
+      {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 32$\times$}\par
+      {\fontsize{7.3}{8.6}\selectfont\color{NvidiaGreen}logical routing-metadata reduction:
+      bool $[T,E]$ $\rightarrow$ int16 $[T,K]$}\par
       \vspace{.06in}
-      \begin{itemize}
-        \item Writes directly into HybridEP registered buffers.
-        \item Avoids a separate NCCL-buffer-to-PyTorch-tensor copy.
-        \item Benefit is collective- and topology-specific.
-        \item Compact metadata reduces bytes before collective choice matters.
-      \end{itemize}
+      {\NvidiaSansMedium Input}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{7.8}{9.2}\selectfont\setlength{\parskip}{0pt}\noindent
+      Each \texttt{topk\_indices} row holds $K$ selected int16 global expert IDs. The scan
+      vector-loads that row; $-1$ marks a dropped ID.\par}
+      \vspace{.06in}
+      {\NvidiaSansMedium Metadata emitted}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{7.8}{9.2}\selectfont\setlength{\parskip}{0pt}\noindent
+      Each ID maps to a node and rank. The scan sets rank bitmasks and derives local-expert masks
+      and per-expert token counts for dispatch.\par}
     \end{column}
   \end{columns}
-  \vspace{.10in}
-  {\small\color{NvidiaGray}Scope: an isolated communication optimization; the full-model
-  gain is not attributed to all-gather alone.}
+\end{frame}
+
+\begin{frame}[fragile]{Custom All-Gather}{TMA pipeline writes route metadata to registered peer buffers}
+  \LocalSource{DeepEP/csrc/hybrid_ep/extension/allgather.cu}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.58\textwidth}
+      \begin{NvidiaCode}[language=NvidiaCUDA,basicstyle=\ttfamily\fontsize{6.0}{7.1}\selectfont]
+// elected warp leader, one double-buffered SMEM tile
+mbarrier_arrive_expect_tx(mbars[slot], tma_size);
+cp_async_bulk(shared_tile[slot], src + tile_offset,
+              tma_size, mbars[slot]);
+
+while (!mbarrier_try_wait_parity(mbars[slot], parity[slot])) {}
+parity[slot] ^= 1;
+
+for (int r = 0; r < rank_num; ++r)
+  cp_async_bulk(dst_buffers_all_ranks[r] + dst_offset,
+                shared_tile[slot], tma_size);
+cp_async_bulk_commit_group();
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.37\textwidth}
+      {\NvidiaSansMedium Per-warp dataflow}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.4}{9.8}\selectfont\setlength{\parskip}{0pt}\noindent
+      Four warps own independent pipelines. Each double-buffers a 16 KB tile in shared memory,
+      then issues TMA stores directly to IPC-mapped peer buffers.\par}
+      \vspace{.12in}
+      {\NvidiaSansMedium Scope}\NvidiaTightRule{.6pt}\vspace{.04in}
+      {\fontsize{8.4}{9.8}\selectfont\setlength{\parskip}{0pt}\noindent
+      Applies only within one NVLink domain with 16-byte-aligned metadata. Multi-node paths use
+      NCCL.\par}
+    \end{column}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{Design Rejections}{Profiling narrows the feasible design space}
@@ -978,21 +1045,34 @@ validate the selected tuple in the EP72 launch
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.31\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}Direct permute}\par
-      \vspace{.06in}
-      \small Repeated remote writes and address work moved the bottleneck into dispatch; the
-      saved 92 $\mu$s permute did not compensate.
+      \vspace{.035in}
+      \begin{itemize}\fontsize{7.5}{8.8}\selectfont\setlength{\itemsep}{.035in}\setlength{\parskip}{0pt}
+        \item Eliminates the staging buffer, but writes a token once for every routed expert.
+        \item At $K=8$, NCU observed $4.0\times$ more user NVLink TX and $2.2\times$ slower
+          dispatch.
+        \item At the target $H=512$, $K=36$, scattered writes and address work outweigh the
+          standalone permute saving.
+      \end{itemize}
     \end{column}
     \begin{column}{.31\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}Fused combine}\par
-      \vspace{.06in}
-      \small Producer--consumer serialization left the best fused path 14\% slower than
-      standalone.
+      \vspace{.035in}
+      \begin{itemize}\fontsize{7.5}{8.8}\selectfont\setlength{\itemsep}{.035in}\setlength{\parskip}{0pt}
+        \item Unpermute consumers poll until combine produces output chunks.
+        \item Pull-based G2S reads and reductions make combine the slow producer.
+        \item Best tuned path: $434\ \mu\mathrm{s}$ versus $381\ \mu\mathrm{s}$ standalone
+          ($14\%$ slower).
+      \end{itemize}
     \end{column}
     \begin{column}{.31\textwidth}
       {\NvidiaSansMedium\color{NvidiaGreen}Warp-pruned scan}\par
-      \vspace{.06in}
-      \small Extra bitset initialization and coordination cost more than the skipped ballots on
-      key shapes.
+      \vspace{.035in}
+      \begin{itemize}\fontsize{7.5}{8.8}\selectfont\setlength{\itemsep}{.035in}\setlength{\parskip}{0pt}
+        \item Builds a warp-union local-expert mask, then visits only its set bits.
+        \item \texttt{\_\_reduce\_or}, \texttt{\_\_ffs} control flow, and row initialization add
+          coordination work.
+        \item Results regressed on key templates; the simpler rank-bitset scan was retained.
+      \end{itemize}
     \end{column}
   \end{columns}
   \vspace{.14in}
@@ -1102,6 +1182,8 @@ else:
   \end{columns}
 \end{frame}
 
+% Omitted from the current main deck.
+\iffalse
 \begin{frame}{Sparse Path}{Selected routes remain compact from routing through replay}
   \vspace{.02in}
   \centering
@@ -1114,20 +1196,23 @@ else:
   \end{NvidiaProgression}
   \vspace{.10in}
   \begin{tabularx}{.94\textwidth}{@{}X X X@{}}
-    {\NvidiaSansMedium\fontsize{18}{21}\selectfont 23.9$\times$}\newline
+    {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 23.9$\times$}\newline
       {\small router forward}\newline
       {\scriptsize\color{NvidiaGray}pre-radix $\rightarrow$ dense output}
     &
-    {\NvidiaSansMedium\fontsize{18}{21}\selectfont 1.84$\times$}\newline
+      {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 1.84$\times$}\newline
       {\small HybridEP API total}\newline
-      {\scriptsize\color{NvidiaGray}1133.7 $\rightarrow$ 617.1 $\mu$s}
+      {\scriptsize\color{NvidiaGray}controlled API comparison}
     &
-    {\NvidiaSansMedium\fontsize{18}{21}\selectfont 419.7}\newline
+    {\NvidiaSansMedium\fontsize{13}{15.5}\selectfont 419.7}\newline
       {\small full-model TFLOP/s/GPU}\newline
       {\scriptsize\color{NvidiaGray}2304 experts / EP72}
   \end{tabularx}
 \end{frame}
+\fi
 
+% Omitted from the current main deck.
+\iffalse
 \appendix
 \section{Appendix}
 \NvidiaTransitionSlide{section-appendix}{Appendix}
@@ -1136,14 +1221,14 @@ else:
 \begin{frame}{Combine Sensitivity}{EP72: group 2 retains throughput with half the SMs}
   \LocalSource{notes/hybrid-ep-sparse-opt-new.md}
   \renewcommand{\arraystretch}{1.16}
-  \begin{tabularx}{\textwidth}{@{}>{\NvidiaSansMedium}p{.26\textwidth} >{\raggedleft\arraybackslash}p{.15\textwidth} >{\raggedleft\arraybackslash}p{.16\textwidth} >{\raggedright\arraybackslash}X@{}}
+  \begin{tabularx}{\textwidth}{@{}>{\NvidiaSansMedium}p{.29\textwidth} >{\raggedleft\arraybackslash}p{.18\textwidth} >{\raggedright\arraybackslash}X@{}}
     \toprule
-    Configuration & Time & Output BW & Interpretation \\
+    Configuration & Output BW & Interpretation \\
     \midrule
-    Group 1 / 64 SMs & 252 $\mu$s & 265 GB/s & Full FIFO depth; only half of warp resources are utilized \\
-    Group 2 / 32 SMs & 254 $\mu$s & 263 GB/s & Same throughput with half as many SMs \\
-    Group 4 / 32 SMs & 502 $\mu$s & 133 GB/s & Insufficient FIFO depth to hide pull latency \\
-    G2S 64 $\rightarrow$ 128 & 246 $\rightarrow$ 245 $\mu$s & flat & Additional queue depth provides no measurable gain \\
+    Group 1 / 64 SMs & 265 GB/s & Full FIFO depth; only half of warp resources are utilized \\
+    Group 2 / 32 SMs & 263 GB/s & Same throughput with half as many SMs \\
+    Group 4 / 32 SMs & 133 GB/s & Insufficient FIFO depth to hide pull latency \\
+    G2S 64 $\rightarrow$ 128 & 271 $\rightarrow$ 272 GB/s & Additional queue depth provides no measurable gain \\
     \bottomrule
   \end{tabularx}
 \end{frame}
@@ -1195,6 +1280,7 @@ else:
     \bottomrule
   \end{tabularx}
 \end{frame}
+\fi
 \fi
 
 \NvidiaTransitionSlide{section-discussion}{Discussion}
