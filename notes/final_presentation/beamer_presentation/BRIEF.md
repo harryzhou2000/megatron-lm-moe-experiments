@@ -61,10 +61,17 @@ hardware, benchmark scope, warmup, and metric.
 ## Content constraints
 
 - Keep one claim per slide and use takeaway-style titles.
+- Use concise noun-phrase titles rather than statement titles; place the slide's
+  conclusion in the subtitle or body.
 - Use a technical, formal register; define abbreviations at first use and keep
   performance claims explicitly scoped to their measured configuration.
+- Keep source provenance in the appendix and source code; do not place source-file
+  footers on individual slides.
 - Use top-level Beamer sections and insert a current-section roadmap after each
   section transition, including the appendix.
+- Use seven top-level sections: Introduction, Target Workload, Initial Analysis,
+  Fused-Router Optimization, HybridEP Optimization, MCore Integration, and
+  End-to-End Results.
 - Distinguish isolated kernel results, staged stack comparisons, MoE-only
   measurements, and full-model training results.
 - Do not present historical snapshots as controlled additive ablations.
