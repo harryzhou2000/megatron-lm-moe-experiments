@@ -27,6 +27,13 @@
     \includegraphics[width=.97\textwidth,height=2.60in,keepaspectratio]{#3}
   \end{frame}
 }
+\newcommand{\NvidiaTallPlotSlide}[4]{%
+  \begin{frame}{#1}{#2}
+    \NvidiaSource{#4}
+    \centering\vspace*{-.10in}
+    \includegraphics[width=.97\textwidth,height=3.15in,keepaspectratio]{#3}
+  \end{frame}
+}
 \newcommand{\NvidiaTocEntry}[2]{%
   \ifnum\value{section}=#1\def\NvidiaTocColor{NvidiaGreen}\else\def\NvidiaTocColor{NvidiaGreen!20}\fi%
   \noindent\begin{tikzpicture}[baseline=(label.base)]
@@ -111,7 +118,7 @@
       \end{tikzpicture}
     \end{column}
     \begin{column}{.41\textwidth}
-      \begin{NvidiaCode}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.6}{9.0}\selectfont]
 scores = router(x)          # E scores
 ids, weights = topk(scores, K)
 
@@ -120,8 +127,8 @@ for j in range(K):
     y += weights[j] * expert[ids[j]](x)
       \end{NvidiaCode}
       \begin{NvidiaEvidence}{Non-MLP work}
-        Sparse compute reduces MLP FLOPs but does not eliminate owner selection, token exchange,
-        weight preservation, or reverse-path work in backward.
+        Sparse compute reduces MLP FLOPs but retains owner selection, token exchange,
+        probability preservation, and reverse-path work.
       \end{NvidiaEvidence}
     \end{column}
   \end{columns}
@@ -253,81 +260,384 @@ cuda_graph.replay()
 \NvidiaTransitionSlide{Router\\Optimization}
 \NvidiaSectionToc{Fused-Router Optimization}
 
-\begin{frame}[fragile]{Top-$k$ Selection}{Radix selection replaces $K$-dependent scans with a fixed-pass algorithm}
-  \NvidiaSource{Matched B300 trace-back benchmark; TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{\#2821}}
+\begin{frame}{Selection Complexity}{Large $E$ and large $K$ turn repeated selection into the router bottleneck}
+  \NvidiaSource{\href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{TE PR \#2821};
+    \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
-      {\NvidiaSansMedium Baseline selection}\par
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{9.5}{11.5}\selectfont]
-for rank in range(K):
-    ids[rank] = argmax(scores)  # scan E
-    remove(ids[rank])
-      \end{NvidiaCode}
-      \centering {\color{NvidiaGray}Repeated work grows with $E\times K$}
+      {\NvidiaSansMedium Repeated maximum selection}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      \small A rank-$r$ pass scans $E$ scores and checks up to $r-1$ prior IDs:
+      \[
+        \sum_{r=1}^{K} E\,r = \alert{O(EK^2)}.
+      \]
+      \vspace{.05in}
+      \small At $E=2{,}304$, $K=36$, selection repeats a full expert-row walk for every
+      selected rank.
     \end{column}
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium Radix selection}\par
-      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{9.5}{11.5}\selectfont]
-prefix = 0
-for nibble in reversed(range(8)):
-    hist = histogram(scores, prefix)
-    prefix = bucket_containing_rank_k(hist)
-emit_ids(prefix)
-      \end{NvidiaCode}
-      \centering {\color{NvidiaGray}8 fixed FP32 passes, then gather}
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      \small FP32 order bits are narrowed by eight 4-bit passes, followed by a constant
+      number of gathers:
+      \[
+        8E + 2E = \alert{O(E)}.
+      \]
+      \vspace{.05in}
+      \small Work depends on the score representation, not the requested top-$k$. The
+      threshold retains the simple path where radix setup is not profitable.
     \end{column}
   \end{columns}
-  \vspace{-.02in}
-  \noindent\NvidiaMetric{45.36 ms}{pre-radix forward}{T=65,536; E/K=2,304/36}\hfill
-  \NvidiaMetric{3.59 ms}{radix forward}{12.6$\times$ lower time}\hfill
-  \NvidiaMetric{1 warp}{per token row}{deterministic tie handling}
+  \vspace{.02in}
+  \noindent\NvidiaMetric{2,304}{experts}{one score row per token}\hfill
+  \NvidiaMetric{36}{selected IDs}{large sparse fan-out}\hfill
+  \NvidiaMetric{8}{radix passes}{FP32, 4 bits/pass}
 \end{frame}
 
-\NvidiaPlotSlide
-  {Router Stages}
-  {Matched B300 trace-back: 65,536 tokens, 2,304 experts, top-$k=36$, softmax}
-  {assets/generated/router_pr_progression.pdf}
-  {data/trace-back-comparisons; TE PRs \#2821, \#3012, \#3129}
-
-\NvidiaPlotSlide
-  {P3R Bandwidth}
-  {Incremental 8,192-token result for the target 2,304/36 shape}
-  {assets/generated/router_p3r_stages.pdf}
-  {data/router\_fix\_p3R; effective bandwidth, B300}
-
-\begin{frame}[fragile]{Kernel Design}{Coordinated data movement and selection determine router throughput}
-  \NvidiaSource{\href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{TE PR \#3012};
-    fused-router optimization note}
+\begin{frame}[fragile]{Radix Selection}{Each pass narrows the rank-$K$ score prefix without materializing a sort}
+  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/2821}{\#2821};
+    \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
-    \begin{column}{.51\textwidth}
-      \begin{NvidiaCode}
-prefetch(tile[0], buffer[0])
-for tile in token_tiles:
-    prefetch(tile[next], buffer[next])
-    wait(buffer[current])
-    score(buffer[current])
-    radix_topk()
-    write_selected()
-    swap(current, next)
+    \begin{column}{.49\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{7.8}{9.2}\selectfont]
+ordered = float_to_ordered_uint(scores)
+prefix, mask = 0, 0
+rank = topk
+
+for pass in range(7, -1, -1):
+    hist[0:16] = count scores matching prefix
+    bucket = highest_bucket_containing(rank)
+    prefix |= bucket << (4 * pass)
+    mask   |= 0xf << (4 * pass)
+
+gather scores > prefix
+gather ties in index order until topk
       \end{NvidiaCode}
     \end{column}
-    \begin{column}{.44\textwidth}
-      {\NvidiaSansMedium Throughput mechanisms}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.06in}
-      \begin{itemize}
-        \item Persistent execution maintains SM occupancy across token tiles.
-        \item Double-buffered \texttt{cp.async} overlaps score loads with radix selection.
-        \item Packed histograms cut radix counters from 32 to 4; templates remove
-          hot-path branches.
-        \item Two-pass backward removes 36 KiB/block scratch at $E=2{,}304$.
-      \end{itemize}
+    \begin{column}{.45\textwidth}
+      {\NvidiaSansMedium Two phases}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \begin{enumerate}
+        \item Count matching scores in 16 buckets; choose the bucket containing rank $K$.
+        \item Gather scores above the final value; use ordered ties to complete exactly $K$ IDs.
+      \end{enumerate}
+      \vspace{.03in}
+      \begin{NvidiaEvidence}{Invariant}
+        The selected set is exact. Radix changes how the threshold is found, not the top-$k$
+        semantics or deterministic tie handling.
+      \end{NvidiaEvidence}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Radix Kernel}{The CUDA kernel carries the rank state in registers and uses warp collectives}
+  \NvidiaSource{\texttt{TE/transformer\_engine/common/fused\_router/utils.h}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.58\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
+constexpr int kPasses = 8;
+unsigned prefix = 0, mask = 0;
+for (int pass = kPasses - 1; pass >= 0; --pass) {
+  unsigned packed[4] = {};
+  count_matching_scores(packed, prefix, mask);
+  int bucket = find_target(packed, k_remaining);
+  prefix |= unsigned(bucket) << (4 * pass);
+  mask   |= 0xfu << (4 * pass);
+}
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.37\textwidth}
+      {\NvidiaSansMedium One warp / token}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small The implementation maps a token row to a warp. Each lane strides across experts,
+      then warp reductions combine 16 bucket counts.
+      \vspace{.10in}
+      \begin{NvidiaEvidence}{Bounded support}
+        Packed 8-bit counters support $E\leq8160$; the 2,304-expert target is well inside that
+        range.
+      \end{NvidiaEvidence}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Secondary Optimizations}{\href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{PR \#3012} turns the radix algorithm into a throughput-oriented kernel family}
+  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3012}{\#3012};
+    commits 6d6005a7, 69a7c46f, 00b0dad2, 47c98811, 9cfb651a}
+  \vspace{.04in}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.19\textwidth}
+      {\NvidiaSansMedium Loop fusion}\par\vspace{.04in}
+      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      \small Merge clear, load, score, save, and bias work where the score path permits.
+    \end{column}
+    \begin{column}{.19\textwidth}
+      {\NvidiaSansMedium Async load}\par\vspace{.04in}
+      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      \small Double-buffer raw logits and use a persistent grid sized by occupancy.
+    \end{column}
+    \begin{column}{.19\textwidth}
+      {\NvidiaSansMedium Packed radix}\par\vspace{.04in}
+      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      \small Store sixteen counters in four 32-bit registers instead of 32 registers.
+    \end{column}
+    \begin{column}{.19\textwidth}
+      {\NvidiaSansMedium Static score}\par\vspace{.04in}
+      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      \small Instantiate score functions at compile time to remove hot-path branches.
+    \end{column}
+    \begin{column}{.19\textwidth}
+      {\NvidiaSansMedium Merged head}\par\vspace{.04in}
+      \textcolor{NvidiaGreen}{\rule{\linewidth}{.6pt}}\par\vspace{.05in}
+      \small Keep a specialized small-$k$ head while routing large shapes to the optimized head.
+    \end{column}
+  \end{columns}
+  \vspace{.18in}
+  \begin{NvidiaEvidence}{Design principle}
+    The algorithmic fix removed the large-$K$ cliff. These refinements remove data movement,
+    register, branch, and occupancy costs exposed after that cliff is gone.
+  \end{NvidiaEvidence}
+\end{frame}
+
+\begin{frame}[fragile]{Loop Fusion}{The score path writes each expert value once instead of staging separate loops}
+  \NvidiaSource{TE commit \texttt{6d6005a7};
+    \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.58\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+if constexpr (ScoreFunc == kSigmoid) {
+  for (int i = lane_id; i < E; i += 32) {
+    float value = sigmoid(raw_logits[i]);
+    intermediate[pos + i] = value;
+    if (bias) value += bias[i];
+    scores[i] = value;
+  }
+} else if constexpr (ScoreFunc == kSqrtsoftplus) {
+  for (int i = lane_id; i < E; i += 32) {
+    intermediate[pos + i] = raw_logits[i];
+    scores[i] = sqrtsoftplus(raw_logits[i]);
+  }
+}
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.37\textwidth}
+      {\NvidiaSansMedium Fused dataflow}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small A single strided loop converts logits, evaluates the score function, preserves the
+      value required by backward, applies optional bias, and populates selection input.
+      \vspace{.10in}
+      \small The softmax path remains multi-pass because its normalization is mathematically
+      coupled across the entire expert row.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Async Loading}{Raw logits are prefetched with \texttt{cp.async} while the current tile is selected}
+  \NvidiaSource{TE commit \texttt{69a7c46f};
+    \texttt{TE/.../fused\_router/async\_loader.h}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.56\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+// tile n+1 starts before tile n selects
+loader.start_load(next_logits, E, lane_id);
+
+loader.wait();
+select_topk(loader.current_buf());
+
+// 16-byte global-to-shared copy
+cp_async_16B(dst, src);
+cp_async_commit();
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.38\textwidth}
+      {\NvidiaSansMedium Overlap policy}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small The loader keeps the original input dtype in shared memory, deferring conversion to
+      compute. It uses 16-byte vector copies on supported GPUs and a scalar fallback otherwise.
+      \vspace{.10in}
+      \small The host launcher chooses one or two buffers from the shared-memory budget, then
+      sizes the persistent grid from active blocks per SM.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Packed Radix}{Eight-bit fields lower histogram bookkeeping from 32 registers to four}
+  \NvidiaSource{TE commit \texttt{00b0dad2};
+    \texttt{TE/.../fused\_router/utils.h}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.57\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+// 16 counters in 4 packed u32 values
+unsigned packed[4] = {};
+int bucket = (u >> digit_pos) & 0xf;
+int pack = bucket >> 2;
+int shift = (bucket & 3) << 3;
+packed[pack] += 1u << shift;
+
+unsigned count = (packed[b >> 2] >> ((b & 3) << 3)) & 0xffu;
+unsigned total = warp_allreduce_sum(count);
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.38\textwidth}
+      {\NvidiaSansMedium Why it is safe}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small Each lane sees at most $\lceil E/32\rceil$ scores per bucket. For $E=2{,}304$,
+      the largest count is 72, which fits in an 8-bit field.
+      \vspace{.10in}
+      \small The implementation enforces $E\leq8{,}160$ so a packed counter cannot overflow.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Static Scores}{Compile-time score specialization removes the runtime score-function branch}
+  \NvidiaSource{TE commit \texttt{47c98811};
+    \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.55\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.5}{7.6}\selectfont]
+template <typename T, TopkFuncType TopkFunc, int ScoreFunc>
+__global__ void router_forward(...);
+
+if constexpr (ScoreFunc == kSoftmax)
+  softmax(scores, E, lane_id);
+else if constexpr (ScoreFunc == kSigmoid)
+  scores[i] = sigmoid(raw_logits[i]);
+else if constexpr (ScoreFunc == kSqrtsoftplus)
+  scores[i] = sqrtsoftplus(raw_logits[i]);
+}
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.40\textwidth}
+      {\NvidiaSansMedium Specialization}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small The launcher performs the score-function switch once, then each instantiated
+      kernel contains only its required math and synchronization.
+      \vspace{.10in}
+      \small This benefits both top-$k$ and auxiliary-loss forward/backward paths, where branch
+      structure otherwise repeats for every expert.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Merged Head}{A single launcher preserves a lightweight head for small $k$ and the optimized head for large shapes}
+  \NvidiaSource{TE commit \texttt{9cfb651a};
+    \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.58\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.6}{7.8}\selectfont]
+bool use_radix = topk >= radix_threshold && E <= kMaxExperts;
+
+if (!use_radix)
+  launch_simple(simple_kernel<...>);
+else
+  launch(optimized_kernel<..., Radix, ScoreFunc>);
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.37\textwidth}
+      {\NvidiaSansMedium Shape-aware dispatch}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small The simple head avoids async-loader and persistent-grid overhead on conventional
+      small-$k$ shapes. The optimized head is selected only when radix work dominates.
+      \vspace{.10in}
+      \small This is why gains at $2{,}304/36$ do not require regressing common router shapes.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Dense Format}{Selected expert IDs are the sparse contract; the old map encoded mostly zeros}
+  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
+    \texttt{notes/dense\_routing\_rebase\_design.md}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.47\textwidth}
+      {\NvidiaSansMedium Per-token representation}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r r@{}}
+        Format & Shape & Bytes/token \\
+        \midrule
+        Byte map & $[E]$ & 2,304 \\
+        Selected IDs & int16 $[K]$ & 72
+      \end{tabularx}
+      \[
+        \frac{E}{2K}=\frac{2{,}304}{2\times36}=\alert{32\times}.
+      \]
+    \end{column}
+    \begin{column}{.47\textwidth}
+      {\NvidiaSansMedium Target batch}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.08in}
+      \begin{tabularx}{\linewidth}{@{}>{\NvidiaSansMedium}X r@{}}
+        Local metadata, $T=8{,}192$ & Size \\
+        \midrule
+        Byte $[T,E]$ & 18.9 MB \\
+        int16 $[T,K]$ & 0.59 MB
+      \end{tabularx}
+      \vspace{.10in}
+      \small The compact buffer records expert IDs only. Probabilities remain separate because
+      training needs selected weights and their backward dependencies.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Dense Writer}{The forward kernel emits one int16 index per selected route}
+  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
+    \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.57\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+for (int i = lane_id; i < topk; i += 32) {
+  int expert = topk_indices[i];
+  if (indices_out)
+    indices_out[token * topk + i] = static_cast<IndexType>(expert);
+  probs[pos + expert] = scale * topk_scores[i];
+}
+
+if constexpr (IndexType == int16_t)
+  NVTE_CHECK(E <= INT16_MAX, ...);
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.38\textwidth}
+      {\NvidiaSansMedium Producer contract}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small The selected ID output is optional: legacy bytemap/bitmap callers retain their
+      existing format, while dense-route callers receive $[T,K]$ indices directly from the
+      fused selection result.
+      \vspace{.10in}
+      \small $E=2{,}304$ is safely representable in int16.
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{Dense Backward}{Backward traverses selected IDs directly and zero-fills the required dense gradient}
+  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
+    \texttt{TE/.../fused\_router/fused\_topk\_with\_score\_function.cu}}
+  \begin{columns}[T,onlytextwidth]
+    \begin{column}{.57\textwidth}
+      \begin{NvidiaCode}[basicstyle=\ttfamily\fontsize{6.7}{7.9}\selectfont]
+const IndexType* ids = topk_indices + token * topk;
+zero(grad_logits + pos, E);
+
+for (int k = lane_id; k < topk; k += 32) {
+  int expert = static_cast<int>(ids[k]);
+  auto grad = grad_probs[pos + expert] * scale;
+  grad_logits[pos + expert] = grad;
+}
+      \end{NvidiaCode}
+    \end{column}
+    \begin{column}{.38\textwidth}
+      {\NvidiaSansMedium Complexity change}\par
+      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.07in}
+      \small Replace repeated membership tests of every expert against a $K$-entry list with a
+      dense zero-fill plus direct writes to selected locations:
+      \[
+        O\bigl(T(E+K)\bigr)\ \text{instead of}\ O\bigl(TEK\bigr).
+      \]
+      \small Full-row score-function coupling still performs the mathematically required row
+      work; the redundant membership scan is removed.
     \end{column}
   \end{columns}
 \end{frame}
 
 \begin{frame}{Router Bounds}{Optimistic limits contextualize the measured 254.5 $\mu$s result}
   \NvidiaSource{\href{https://www.nvidia.com/en-us/data-center/hgx/}{NVIDIA HGX B300 specs};
-    \texttt{TE/.../fused\_router/utils.h}; P3R merged-head benchmark}
+    \texttt{TE/.../fused\_router/utils.h}}
   \begin{columns}[T,onlytextwidth]
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium HBM traffic floor}\par
@@ -338,7 +648,7 @@ for tile in token_tiles:
       \]
       \small The measured kernel reaches about 12\% of raw HBM bandwidth.
       \vspace{.08in}
-      {\scriptsize\color{NvidiaGray}This counts tensor bytes, not cache-line or instruction overhead.}
+      {\scriptsize\color{NvidiaGray}Tensor bytes only; cache-line and instruction overhead are excluded.}
     \end{column}
     \begin{column}{.47\textwidth}
       {\NvidiaSansMedium Compute-issue floor}\par
@@ -350,45 +660,70 @@ for tile in token_tiles:
       \small One FP32 op/visit at 75 TFLOP/s/GPU gives an impossible
       \alert{$\sim2.0\,\mu$s} floor.
       \vspace{.08in}
-      {\scriptsize\color{NvidiaGray}Real visits include masks, shifts, histograms, shuffles, scans, and dependencies.}
+      {\scriptsize\color{NvidiaGray}Masks, shifts, histograms, shuffles, scans, and dependencies remain.}
     \end{column}
   \end{columns}
-  \vspace{.10in}
 \end{frame}
 
-\begin{frame}[fragile]{Dense Routing Map}{Selected IDs replace the dense bool map}
-  \NvidiaSource{TE PR \href{https://github.com/NVIDIA/TransformerEngine/pull/3129}{\#3129};
-    \texttt{notes/dense\_routing\_rebase\_design.md}}
-  \begin{columns}[T,onlytextwidth]
-    \begin{column}{.48\textwidth}
-      {\NvidiaSansMedium Compact representation}\par
-      \vspace{.04in}{\color{NvidiaGreen}\rule{\linewidth}{.6pt}}\par\vspace{.09in}
-      \begin{tabularx}{\linewidth}{@{}X r@{}}
-        Bool $[T,E]$ & 2,304 B/token \\
-        int16 $[T,K]$ & 72 B/token
-      \end{tabularx}
-      \[
-        \frac{E}{2K}=\frac{2304}{72}=\alert{32\times}.
-      \]
-      \vspace{.08in}
-      {\small Backward also traverses only the $K$ selected IDs; it no longer asks all $E$
-      experts to test a $K$-entry membership list.}
-    \end{column}
-    \begin{column}{.47\textwidth}
-      \begin{NvidiaCode}
-route_ids = int16[T, K]
-probs = fused_router(logits,
-                     dense_route_out=route_ids)
-hybrid_ep.dispatch(
-    tokens, dense_route=route_ids, probs=probs
-)
-      \end{NvidiaCode}
-      \vspace{.05in}
-      {\small One compact producer-to-consumer contract connects router, scan, dispatch,
-      and backward without reconstructing the bool map.}
-    \end{column}
-  \end{columns}
-\end{frame}
+\NvidiaPlotSlide
+  {Router Stages}
+  {Matched B300 trace-back: 65,536 tokens, 2,304 experts, top-$k=36$, softmax}
+  {assets/generated/router_pr_progression.pdf}
+  {data/trace-back-comparisons; TE PRs \#2821, \#3012, \#3129}
+
+\NvidiaPlotSlide
+  {Secondary Gains}
+  {Incremental 8,192-token result for the target 2,304/36 shape}
+  {assets/generated/router_p3r_stages.pdf}
+  {incremental router-optimization records; effective bandwidth, B300}
+
+\NvidiaTallPlotSlide
+  {Top-k Forward}
+  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_topk_forward_softmax.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Top-k Forward}
+  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_topk_forward_sigmoid.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Top-k Backward}
+  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_topk_backward_raw_softmax.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Top-k Backward}
+  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_topk_backward_raw_sigmoid.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Aux-loss Forward}
+  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_forward_softmax.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Aux-loss Forward}
+  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_forward_sigmoid.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Aux-loss Backward}
+  {0730 B300 trace pass: softmax; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_backward_raw_softmax.png}
+  {data/trace-back-comparisons}
+
+\NvidiaTallPlotSlide
+  {Aux-loss Backward}
+  {0730 B300 trace pass: sigmoid; seven router shapes and four token counts}
+  {assets/generated/trace_aux_loss_backward_raw_sigmoid.png}
+  {data/trace-back-comparisons}
 
 \section{HybridEP Optimization}
 \NvidiaTransitionSlide{HybridEP\\Optimization}
@@ -857,7 +1192,7 @@ else:
     Topic & Primary source \\
     \midrule
     Persistent content memory & \texttt{../sparser\_moe\_final\_presentation\_content.md} \\
-    Router trace-back & \texttt{data/router\_trace\_back.csv}; \texttt{data/router\_fix\_p3R\_*.csv} \\
+    Router trace-back & 0730 trace-back checkpoints; incremental optimization records \\
     HybridEP & \texttt{hybrid-ep-sparse-opt-new.md}; \texttt{hybrid\_ep\_rebased\_bw\_results.md} \\
     Dense scan & \texttt{isolated-scan-bench.md} \\
     Full-model sweep & \texttt{qwen3\_next\_2606\_image\_sweep\_20260728/README.md} \\

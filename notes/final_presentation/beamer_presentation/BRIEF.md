@@ -22,12 +22,15 @@ listed below.
    preprocessing. Router and communication bottlenecks motivate the following
    optimization sections.
 4. Explain fused-router work by optimization stage:
-   - initial large-top-k radix support;
-   - P3/P3R loop fusion, async loading, persistent grid, packed radix histogram,
-     static score dispatch, and backward improvements;
-   - compact dense routing-map output and backward support.
-   Show matched trace-back comparisons and detailed P3R progression. Add
-   reference bounds for B300 HBM bandwidth and top-k CUDA-core execution.
+   - start with the large-top-k selection-complexity model, then radix selection;
+   - walk through source-level implementation skeletons for loop fusion,
+     async loading with `cp.async`, packed radix counters, static score-function
+     dispatch, and merged specialized heads under Transformer Engine PR #3012;
+   - dedicate multiple slides to the compact int16 `[T,K]` route format, its
+     forward writer, and selected-index backward traversal.
+   Put all router microbenchmarks at the end of this section: staged gains,
+   B300 reference bounds, and complete 0730 trace-back plots across router
+   shapes, token counts, score functions, and forward/backward paths.
 5. Explain HybridEP tuning and optimization:
    - ballot-based permute/unpermute;
    - expert-local probability transfer;
@@ -48,7 +51,7 @@ listed below.
 ## Required evidence
 
 - `data/trace-back-comparisons/`
-- `data/router_fix_p3R_*.csv` and related `data/` router records
+- incremental router-optimization records under `data/`
 - `notes/final_presentation/sparser_moe_final_presentation_content.md`
 - `/Users/harry/projects/agentic-mcore-dev/notes/moe_perf_canonical_matrix_20260730/README.md`
 - `/Users/harry/projects/agentic-mcore-dev/notes/qwen3_next_2606_image_sweep_20260728/README.md`
@@ -79,6 +82,10 @@ hardware, benchmark scope, warmup, and metric.
 - Omit unrelated multimodal, MIMO, and pipeline-parallel work.
 - Keep failed ideas only when they explain a design decision.
 - Cite local records, PRs, model papers/cards, and benchmark methodology.
+- For CUDA code, show only small source-grounded skeletons; use a compact code
+  font when necessary, and do not reproduce full kernels.
+- Call the post-radix work **Secondary Optimizations** in audience-facing slides;
+  reference PR #3012 rather than the internal stage nickname.
 
 ## Deliverables and QA
 
