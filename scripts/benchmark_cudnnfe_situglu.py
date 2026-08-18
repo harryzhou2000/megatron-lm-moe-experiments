@@ -124,6 +124,8 @@ def _make_forward_runner(
     intermediate_size: int,
     group_m_list: list[int],
     use_dynamic_sched: bool,
+    vector_f32: bool,
+    mma_tiler_m: int,
 ):
     from cuda.bindings import driver as cuda
     from cudnn.gemm.cutedsl.grouped.glu.api import GroupedGemmGluSm100
@@ -172,10 +174,10 @@ def _make_forward_runner(
         sample_norm_const=inputs["norm_const_tensor"],
         sample_prob=inputs["prob_tensor"],
         acc_dtype=torch.float32,
-        mma_tiler_mn=(256, 256),
-        cluster_shape_mn=(2, 1),
+        mma_tiler_mn=(mma_tiler_m, 256),
+        cluster_shape_mn=(2 if mma_tiler_m == 256 else 1, 1),
         sf_vec_size=32,
-        vector_f32=False,
+        vector_f32=vector_f32,
         m_aligned=256,
         discrete_col_sfd=False,
         act_func=act_func,
@@ -218,6 +220,8 @@ def _make_backward_runner(
     intermediate_size: int,
     group_m_list: list[int],
     use_dynamic_sched: bool,
+    vector_f32: bool,
+    mma_tiler_m: int,
 ):
     from cuda.bindings import driver as cuda
     from cudnn.gemm.cutedsl.grouped.dglu.api import GroupedGemmDgluSm100
@@ -267,10 +271,10 @@ def _make_backward_runner(
         sample_sfd_col=outputs["sfd_col_tensor"],
         sample_norm_const=inputs["norm_const_tensor"],
         acc_dtype=torch.float32,
-        mma_tiler_mn=(256, 256),
-        cluster_shape_mn=(2, 1),
+        mma_tiler_mn=(mma_tiler_m, 256),
+        cluster_shape_mn=(2 if mma_tiler_m == 256 else 1, 1),
         sf_vec_size=32,
-        vector_f32=False,
+        vector_f32=vector_f32,
         m_aligned=256,
         discrete_col_sfd=False,
         act_func=act_func,
@@ -344,6 +348,8 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
             intermediate_size=int(model["expert_intermediate_size"]),
             group_m_list=group_m_list,
             use_dynamic_sched=args.dynamic_sched,
+            vector_f32=args.vector_f32,
+            mma_tiler_m=args.mma_tiler_m,
         )
         runners[(direction, activation)] = runner
         keepalive.append(state)
@@ -399,6 +405,8 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
                 "seed": args.seed,
                 "jitter": args.jitter,
                 "dynamic_sched": args.dynamic_sched,
+                "vector_f32": args.vector_f32,
+                "mma_tiler_m": args.mma_tiler_m,
             }
             results.append(row)
         print(
@@ -444,6 +452,13 @@ def main() -> None:
         default=True,
         help="Use the dynamic tile scheduler selected by TE's fused grouped MLP path.",
     )
+    parser.add_argument(
+        "--vector-f32",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use the grouped-GEMM vectorized-FP32 epilogue mode.",
+    )
+    parser.add_argument("--mma-tiler-m", type=int, choices=(128, 256), default=256)
     parser.add_argument("--csv-output", type=Path)
     args = parser.parse_args()
 
@@ -474,6 +489,8 @@ def main() -> None:
         "iterations": args.iterations,
         "rounds": args.rounds,
         "dynamic_sched": args.dynamic_sched,
+        "vector_f32": args.vector_f32,
+        "mma_tiler_m": args.mma_tiler_m,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
     print("metadata=" + json.dumps(metadata, sort_keys=True), flush=True)
