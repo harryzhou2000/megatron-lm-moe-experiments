@@ -179,6 +179,7 @@ def _make_forward_runner(
         m_aligned=256,
         discrete_col_sfd=False,
         act_func=act_func,
+        situ_beta1=4.0,
         b_major="k",
         use_dynamic_sched=use_dynamic_sched,
     )
@@ -325,12 +326,17 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
 
     runners = {}
     keepalive = []
+    case_seed = args.seed + tokens + total_experts
     for direction, activation in (
         ("forward", "swiglu"),
         ("forward", "situglu"),
         ("backward", "dswiglu"),
         ("backward", "dsituglu"),
     ):
+        # Keep each activation's tensors identical and make a case independent
+        # of which model shapes were benchmarked before it.
+        torch.manual_seed(case_seed)
+        torch.cuda.manual_seed_all(case_seed)
         factory = _make_forward_runner if direction == "forward" else _make_backward_runner
         runner, state = factory(
             act_func=activation,
