@@ -41,6 +41,33 @@ MODEL_CONFIGS = {
     },
 }
 
+FORMAT_CONFIGS = {
+    "mxfp4": {
+        "ab_dtype": torch.float4_e2m1fn_x2,
+        "sf_dtype": torch.float8_e8m0fnu,
+        "sf_vec_size": 32,
+        "forward_d_dtype": torch.bfloat16,
+        "backward_d_dtype": torch.bfloat16,
+    },
+    "mxfp8": {
+        "ab_dtype": torch.float8_e4m3fn,
+        "sf_dtype": torch.float8_e8m0fnu,
+        "sf_vec_size": 32,
+        "forward_d_dtype": torch.float8_e4m3fn,
+        "backward_d_dtype": torch.float8_e4m3fn,
+    },
+    "nvfp4": {
+        "ab_dtype": torch.float4_e2m1fn_x2,
+        "sf_dtype": torch.float8_e4m3fn,
+        "sf_vec_size": 16,
+        "forward_d_dtype": torch.bfloat16,
+        "backward_d_dtype": torch.bfloat16,
+    },
+}
+
+KIMI_SITU_BETA1 = 4.0
+KIMI_SITU_BETA2 = 25.0
+
 
 def _balanced_random_split(total: int, groups: int, seed: int, jitter: float) -> list[int]:
     """Return positive, bounded-random group sizes that sum exactly to ``total``."""
@@ -119,6 +146,7 @@ def _summarize_tflops(samples_ms: list[float], gemm_flops: int) -> dict[str, flo
 
 def _make_forward_runner(
     *,
+    format_name: str,
     act_func: str,
     hidden_size: int,
     intermediate_size: int,
@@ -135,15 +163,16 @@ def _make_forward_runner(
     )
 
     num_experts = len(group_m_list)
+    format_config = FORMAT_CONFIGS[format_name]
     n = 2 * intermediate_size
     inputs = allocate_discrete_input_tensors(
         n=n,
         k=hidden_size,
         num_experts=num_experts,
         group_m_list=group_m_list,
-        ab_dtype=torch.float8_e4m3fn,
-        sf_dtype=torch.float8_e8m0fnu,
-        sf_vec_size=32,
+        ab_dtype=format_config["ab_dtype"],
+        sf_dtype=format_config["sf_dtype"],
+        sf_vec_size=format_config["sf_vec_size"],
         m_aligned=256,
         b_major="k",
     )
@@ -151,12 +180,12 @@ def _make_forward_runner(
         tensor_m=inputs["tensor_m"],
         n=n,
         num_experts=num_experts,
-        ab_dtype=torch.float8_e4m3fn,
+        ab_dtype=format_config["ab_dtype"],
         c_dtype=torch.bfloat16,
-        d_dtype=torch.float8_e4m3fn,
+        d_dtype=format_config["forward_d_dtype"],
         cd_major="n",
-        sf_dtype=torch.float8_e8m0fnu,
-        sf_vec_size=32,
+        sf_dtype=format_config["sf_dtype"],
+        sf_vec_size=format_config["sf_vec_size"],
     )
     api = GroupedGemmGluSm100(
         sample_a=inputs["a_tensor"],
@@ -176,12 +205,12 @@ def _make_forward_runner(
         acc_dtype=torch.float32,
         mma_tiler_mn=(mma_tiler_m, 256),
         cluster_shape_mn=(2 if mma_tiler_m == 256 else 1, 1),
-        sf_vec_size=32,
+        sf_vec_size=format_config["sf_vec_size"],
         vector_f32=vector_f32,
         m_aligned=256,
         discrete_col_sfd=False,
         act_func=act_func,
-        situ_beta1=4.0,
+        situ_beta1=KIMI_SITU_BETA1,
         b_major="k",
         use_dynamic_sched=use_dynamic_sched,
     )
@@ -205,8 +234,8 @@ def _make_forward_runner(
             sfd_col_tensor=outputs["sfd_col_tensor"],
             norm_const_tensor=inputs["norm_const_tensor"],
             prob_tensor=inputs["prob_tensor"],
-            situ_beta1=4.0,
-            situ_beta2=25.0,
+            situ_beta1=KIMI_SITU_BETA1,
+            situ_beta2=KIMI_SITU_BETA2,
             current_stream=stream,
         )
 
@@ -215,6 +244,7 @@ def _make_forward_runner(
 
 def _make_backward_runner(
     *,
+    format_name: str,
     act_func: str,
     hidden_size: int,
     intermediate_size: int,
@@ -231,15 +261,16 @@ def _make_backward_runner(
     )
 
     num_experts = len(group_m_list)
+    format_config = FORMAT_CONFIGS[format_name]
     inputs = allocate_discrete_dswiglu_input_tensors(
         n=intermediate_size,
         k=hidden_size,
         num_experts=num_experts,
         group_m_list=group_m_list,
-        ab_dtype=torch.float8_e4m3fn,
+        ab_dtype=format_config["ab_dtype"],
         c_dtype=torch.bfloat16,
-        sf_dtype=torch.float8_e8m0fnu,
-        sf_vec_size=32,
+        sf_dtype=format_config["sf_dtype"],
+        sf_vec_size=format_config["sf_vec_size"],
         m_aligned=256,
         b_major="k",
     )
@@ -247,11 +278,11 @@ def _make_backward_runner(
         tensor_m=inputs["tensor_m"],
         n=intermediate_size,
         num_experts=num_experts,
-        ab_dtype=torch.float8_e4m3fn,
-        d_dtype=torch.float8_e4m3fn,
+        ab_dtype=format_config["ab_dtype"],
+        d_dtype=format_config["backward_d_dtype"],
         cd_major="n",
-        sf_dtype=torch.float8_e8m0fnu,
-        sf_vec_size=32,
+        sf_dtype=format_config["sf_dtype"],
+        sf_vec_size=format_config["sf_vec_size"],
     )
     api = GroupedGemmDgluSm100(
         sample_a=inputs["a_tensor"],
@@ -273,11 +304,13 @@ def _make_backward_runner(
         acc_dtype=torch.float32,
         mma_tiler_mn=(mma_tiler_m, 256),
         cluster_shape_mn=(2 if mma_tiler_m == 256 else 1, 1),
-        sf_vec_size=32,
+        sf_vec_size=format_config["sf_vec_size"],
         vector_f32=vector_f32,
         m_aligned=256,
         discrete_col_sfd=False,
         act_func=act_func,
+        situ_beta1=KIMI_SITU_BETA1,
+        situ_beta2=KIMI_SITU_BETA2,
         b_major="k",
         use_dynamic_sched=use_dynamic_sched,
     )
@@ -309,8 +342,9 @@ def _make_backward_runner(
     return run, (api, inputs, outputs)
 
 
-def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object]]:
+def _benchmark_case(args, model_name: str, format_name: str, tokens: int) -> list[dict[str, object]]:
     model = MODEL_CONFIGS[model_name]
+    format_config = FORMAT_CONFIGS[format_name]
     total_experts = int(model["total_experts"])
     if total_experts % args.ep != 0:
         raise ValueError(f"{model_name}: total_experts={total_experts} is not divisible by EP={args.ep}")
@@ -323,7 +357,7 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
     )
     dist = _distribution_stats(group_m_list, alignment=256)
     print(
-        f"case model={model_name} local_experts={local_experts} local_tokens={tokens} "
+        f"case model={model_name} format={format_name} local_experts={local_experts} local_tokens={tokens} "
         f"padded_tokens={dist['padded_tokens']} split={group_m_list}",
         flush=True,
     )
@@ -343,6 +377,7 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
         torch.cuda.manual_seed_all(case_seed)
         factory = _make_forward_runner if direction == "forward" else _make_backward_runner
         runner, state = factory(
+            format_name=format_name,
             act_func=activation,
             hidden_size=int(model["hidden_size"]),
             intermediate_size=int(model["expert_intermediate_size"]),
@@ -390,6 +425,10 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
         for activation in (baseline_activation, situ_activation):
             row = {
                 "model": model_name,
+                "format": format_name,
+                "ab_dtype": str(format_config["ab_dtype"]),
+                "sf_dtype": str(format_config["sf_dtype"]),
+                "sf_vec_size": format_config["sf_vec_size"],
                 "direction": direction,
                 "activation": activation,
                 "ep": args.ep,
@@ -407,10 +446,12 @@ def _benchmark_case(args, model_name: str, tokens: int) -> list[dict[str, object
                 "dynamic_sched": args.dynamic_sched,
                 "vector_f32": args.vector_f32,
                 "mma_tiler_m": args.mma_tiler_m,
+                "situ_beta1": KIMI_SITU_BETA1,
+                "situ_beta2": KIMI_SITU_BETA2,
             }
             results.append(row)
         print(
-            f"result model={model_name} tokens={tokens} direction={direction} "
+            f"result model={model_name} format={format_name} tokens={tokens} direction={direction} "
             f"{baseline_activation}={baseline_tflops:.3f}TFLOP/s "
             f"{situ_activation}={situ_tflops:.3f}TFLOP/s "
             f"situ_throughput_retention={situ_tflops / baseline_tflops:.4f}",
@@ -439,6 +480,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cudnn-fe-root", type=Path, required=True)
     parser.add_argument("--models", nargs="+", choices=MODEL_CONFIGS, default=list(MODEL_CONFIGS))
+    parser.add_argument("--formats", nargs="+", choices=FORMAT_CONFIGS, default=list(FORMAT_CONFIGS))
     parser.add_argument("--tokens", nargs="+", type=int, default=[4096, 8192, 16384])
     parser.add_argument("--ep", type=int, default=64)
     parser.add_argument("--seed", type=int, default=1234)
@@ -484,6 +526,7 @@ def main() -> None:
         "cudnn_frontend": importlib.metadata.version("nvidia-cudnn-frontend"),
         "cutlass_dsl": importlib.metadata.version("nvidia-cutlass-dsl"),
         "ep": args.ep,
+        "formats": args.formats,
         "tokens": args.tokens,
         "warmup": args.warmup,
         "iterations": args.iterations,
@@ -491,14 +534,17 @@ def main() -> None:
         "dynamic_sched": args.dynamic_sched,
         "vector_f32": args.vector_f32,
         "mma_tiler_m": args.mma_tiler_m,
+        "situ_beta1": KIMI_SITU_BETA1,
+        "situ_beta2": KIMI_SITU_BETA2,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
     print("metadata=" + json.dumps(metadata, sort_keys=True), flush=True)
 
     rows = []
     for model_name in args.models:
-        for tokens in args.tokens:
-            rows.extend(_benchmark_case(args, model_name, tokens))
+        for format_name in args.formats:
+            for tokens in args.tokens:
+                rows.extend(_benchmark_case(args, model_name, format_name, tokens))
 
     if args.csv_output is not None:
         _write_csv(args.csv_output, rows)
