@@ -10,3 +10,7 @@
 [submodule "DeepGEMM"]
 	path = DeepGEMM
 	url = https://github.com/deepseek-ai/DeepGEMM
+[submodule "cudnn-frontend"]
+	path = cudnn-frontend
+	url = git@github.com:harryzhou2000/cudnn-frontend.git
+	branch = develop
