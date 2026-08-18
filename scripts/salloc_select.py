@@ -3,15 +3,17 @@
 #
 # See LICENSE for license information.
 
-"""Select a SLURM partition and submit a salloc job on computelab.
+"""Select a SLURM partition and submit a SLURM allocation on computelab.
 
 Queries sinfo/squeue to find partitions matching a regex, picks the best
-node based on GPU availability, and runs salloc.
+node based on GPU availability, and runs salloc or an sbatch sleep holder.
 
 Modes
 -----
 - **select** (default): Pick the single best partition/node and submit one salloc.
 - **--all**: Submit salloc on every matching partition simultaneously (first wins).
+- **--sbatch**: Submit a four-hour ``sleep infinity`` allocation holder for agent use.
+  Never use this mode to submit the actual workload.
 
 Usage
 -----
@@ -26,6 +28,10 @@ Usage
 
     # Custom time limit:
     python salloc_select.py b300 --gpus 8 --time 2:00:00
+
+    # Agent-owned persistent allocation (safe across login frontends):
+    python salloc_select.py b300 --gpus 2 --host computelab --time 4:00:00 \
+        --sbatch --job-name codex-gpu-work
 """
 
 from __future__ import annotations
@@ -419,6 +425,33 @@ def build_salloc_cmd(
     return cmd
 
 
+def build_sbatch_cmd(
+    partition: str,
+    gpus: int,
+    time_limit: str,
+    extra_args: list[str],
+    *,
+    job_name: str,
+) -> list[str]:
+    """Build an sbatch sleep holder; actual workloads must run on its assigned node."""
+    cmd = [
+        "sbatch",
+        "--parsable",
+        "--job-name",
+        job_name,
+        "-p",
+        partition,
+        "--gpus",
+        str(gpus),
+        "-N1",
+        "-t",
+        time_limit,
+    ]
+    cmd.extend(extra_args)
+    cmd.extend(["--wrap", "sleep infinity"])
+    return cmd
+
+
 def do_select_mode(
     nodes: list[NodeInfo],
     jobs: list[JobInfo],
@@ -428,6 +461,8 @@ def do_select_mode(
     *,
     dry_run: bool,
     host: str | None,
+    use_sbatch: bool,
+    job_name: str,
 ) -> None:
     """Mode 1: select the single best partition and submit."""
     node_jobs: dict[str, list[JobInfo]] = {}
@@ -453,12 +488,29 @@ def do_select_mode(
     print(f"    Reason:   {reason}")
     print(f"    GPUs:     {candidate.gpus_free}/{candidate.gpus_total} free")
 
-    cmd = build_salloc_cmd(candidate.partition, gpus, time_limit, extra_args)
-    cmd_str = " ".join(cmd)
+    if use_sbatch:
+        cmd = build_sbatch_cmd(
+            candidate.partition,
+            gpus,
+            time_limit,
+            extra_args,
+            job_name=job_name,
+        )
+    else:
+        cmd = build_salloc_cmd(candidate.partition, gpus, time_limit, extra_args)
+    cmd_str = shlex.join(cmd)
     print(f"\n==> Command: {cmd_str}\n")
 
     if dry_run:
         print("[dry-run] Not submitting.")
+        return
+
+    if use_sbatch:
+        output = run_cmd(cmd, host=host).strip()
+        job_id = output.split(";", maxsplit=1)[0]
+        print(f"==> Submitted batch allocation job {job_id}")
+        print(f"    Poll:   squeue -j {job_id} -h -o '%i %N %t'")
+        print(f"    Cancel: scancel {job_id}")
         return
 
     if host:
@@ -599,6 +651,19 @@ def main() -> None:
         help="Submit salloc on ALL matching partitions simultaneously.",
     )
     parser.add_argument(
+        "--sbatch",
+        action="store_true",
+        help=(
+            "Submit an allocation holder whose only payload is 'sleep infinity'. "
+            "Run the actual workload directly on its assigned node."
+        ),
+    )
+    parser.add_argument(
+        "--job-name",
+        default="codex-gpu-allocation",
+        help="Job name for --sbatch (default: codex-gpu-allocation).",
+    )
+    parser.add_argument(
         "--dry-run", "-n",
         action="store_true",
         help="Show what would be done without actually submitting.",
@@ -618,6 +683,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.sbatch and args.all_mode:
+        parser.error("--sbatch cannot be combined with --all")
 
     try:
         pattern = re.compile(args.pattern, re.IGNORECASE)
@@ -667,7 +735,10 @@ def main() -> None:
     else:
         do_select_mode(
             nodes, jobs, args.gpus, args.time_limit, args.extra,
-            dry_run=args.dry_run, host=args.host,
+            dry_run=args.dry_run,
+            host=args.host,
+            use_sbatch=args.sbatch,
+            job_name=args.job_name,
         )
 
 

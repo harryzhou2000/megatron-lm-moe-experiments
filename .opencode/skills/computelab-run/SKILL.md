@@ -1,23 +1,11 @@
 ---
 name: computelab-run
 description: Run commands on remote GPU compute nodes via the computelab SLURM cluster. Use when the user wants to run tests, benchmarks, or any command on the remote GPU machine, or when they say "run on compute", "run remotely", "test on GPU", "run on computelab", or similar phrases.
-license: MIT
 ---
 
 # Computelab Run
 
 Run commands on remote GPU compute nodes through a 3-hop SSH chain: local Mac → computelab (SLURM login) → compute node → enroot container with GPU access.
-
-## When to Use This Skill
-
-Activate this skill when:
-
-- The user says "run on compute", "run remotely", "test on GPU", "run on computelab"
-- The user wants to run a test, benchmark, or any command that requires CUDA GPUs
-- The user wants to rebuild DeepEP, TE, or other CUDA code on the remote machine
-- The user wants to check GPU status (`nvidia-smi`)
-- The user asks to sync code to the remote machine
-- The user asks to run `test_hybrid_ep.py` or any DeepEP/TE test
 
 ## Environment
 
@@ -36,7 +24,8 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 - **Enroot container name**: `test_container_2606`
 - **Python environment**: `test_container_2606` uses system Python/pip; older
   containers may provide `/workspace/venv/bin/activate`
-- **Current CuTe baseline**: nvidia-cutlass-dsl 4.4.2 with cuDNN Frontend 1.26.0
+- **Dependency versions**: verify inside the selected container before testing; the
+  experimental container may be overwritten.
 
 ### Key Paths
 
@@ -54,13 +43,44 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 
 ## Workflow
 
-### Step 1: Discover the Active Compute Node
+### Step 1: Discover or Request an Allocation
 
 ```bash
-ssh computelab "squeue -u \$USER -h -o '%N'"
+ssh computelab "squeue -u \$USER -h -o '%i %N %t %j'"
 ```
 
-This returns the node name (e.g., `umb-b300-dp-184`). If no output, there is no active SLURM job.
+If a suitable allocation is already running, use its node explicitly. Do not request a
+second allocation. If an agent needs a new allocation, use `sbatch` only to start a
+four-hour `sleep infinity` allocation holder on an explicitly selected partition. Never
+submit the actual build, test, or benchmark as an `sbatch` payload, and never hold an
+interactive `salloc` in a local terminal or tmux session. Computelab SSH may land on
+different login frontends, while the allocation holder persists independently.
+
+Use the selector's batch mode:
+
+```bash
+python3 scripts/salloc_select.py b300 --gpus 2 --host computelab \
+    --time 4:00:00 --sbatch --job-name codex-moe-test
+```
+
+This selects and passes a concrete partition to `sbatch`; its only payload is
+`sleep infinity`. The allocation may remain pending, so record the returned job ID, poll
+until it is running, and resolve its node:
+
+```bash
+ssh computelab "squeue -j <job-id> -h -o '%i %N %t %j'"
+```
+
+After it starts, run the workload directly through the explicit node rather than through
+`sbatch`, then release only that agent-owned allocation holder:
+
+```bash
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <node> -c test_container_2606 '<command>'"
+ssh computelab "scancel <job-id>"
+```
+
+Do not cancel allocations that were not created for the current task.
 
 ### Step 2: Sync Code (if needed)
 
@@ -91,11 +111,12 @@ After syncing, optionally verify: `ssh computelab "cd ~/projects/moe/DeepEP && g
 **Option A — Helper script (recommended for single commands):**
 
 ```bash
-ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh '<command>'"
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 '<command>'"
 ```
 
 The helper script automatically:
-1. Discovers the active SLURM node via `squeue`
+1. Uses the explicit SLURM node (or discovers one only when `-n` is omitted)
 2. SSHs to it
 3. Launches the enroot container with mounts
 4. Activates `/workspace/venv` when the selected container provides it

@@ -113,7 +113,7 @@ def _plot(data: pd.DataFrame, kernel: str, test_pass: str, output_path: Path) ->
                     else checkpoint
                 )
                 ax.plot(x_positions, y_values, marker="o", color=color, label=label)
-            ax.set_title(f"{score_function}, T={num_tokens:,}")
+            ax.set_title(f"{score_function}, T={num_tokens}")
             ax.set_xticks(x_positions, SHAPES, rotation=45, ha="right")
             ax.set_ylim(0, y_max_by_score_function[score_function])
             ax.grid(axis="y", alpha=0.3)
