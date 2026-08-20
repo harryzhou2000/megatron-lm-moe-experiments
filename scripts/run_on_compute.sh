@@ -52,7 +52,7 @@ echo "==> Using container: $CONTAINER"
 #
 # Environment setup inside the container:
 #   1. Add pixi bin to PATH (ccache lives here)
-#   2. Set CCACHE_DIR for build caching
+#   2. Configure the user ccache with worktree-independent source paths
 #   3. Activate the Python venv when the selected container provides it
 ssh -o StrictHostKeyChecking=accept-new "$NODE" "enroot start -w \
     --mount /home/scratch.hhanyu_gpu:/home/scratch.hhanyu_gpu \
@@ -60,6 +60,9 @@ ssh -o StrictHostKeyChecking=accept-new "$NODE" "enroot start -w \
     $CONTAINER \
     /bin/bash -c 'export PATH=$HOME/.pixi.x86_64/bin:$HOME/.local/bin:/workspace/venv/bin:\$PATH && \
                   export CCACHE_DIR=$HOME/scratch/.ccache && \
+                  export CCACHE_BASEDIR=/home/scratch.hhanyu_gpu/projects/moe && \
+                  export CCACHE_NOHASHDIR=1 && \
+                  export CCACHE_COMPILERCHECK=content && \
                   if [ -f /workspace/venv/bin/activate ]; then \
                     source /workspace/venv/bin/activate; \
                   fi && \

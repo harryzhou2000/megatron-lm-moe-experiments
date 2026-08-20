@@ -41,6 +41,24 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 | DeepEP JIT cache | — | `~/.deepep/hybrid_ep/jit/` (inside container) |
 | Rsync exclude | `~/.rsync-exclude` | — |
 
+### Compiler Cache
+
+Use the persistent user cache at `~/scratch/.ccache`. The login shell and
+`scripts/run_on_compute.sh` configure:
+
+```bash
+export CCACHE_DIR="$HOME/scratch/.ccache"
+export CCACHE_BASEDIR=/home/scratch.hhanyu_gpu/projects/moe
+export CCACHE_NOHASHDIR=1
+export CCACHE_COMPILERCHECK=content
+```
+
+`CCACHE_BASEDIR` and `CCACHE_NOHASHDIR` let identical sources in worktrees below
+the project root share entries. `CCACHE_COMPILERCHECK=content` also permits reuse
+when an otherwise identical compiler binary has a different timestamp. A changed
+shared header, compiler flag, CUDA architecture list, or preprocessor definition
+still produces a legitimate miss. Keep complete build logs for later inspection.
+
 ## Workflow
 
 ### Step 1: Discover or Request an Allocation
@@ -49,30 +67,43 @@ local (Mac)  ──ssh──►  computelab (SLURM login)  ──ssh──►  c
 ssh computelab "squeue -u \$USER -h -o '%i %N %t %j'"
 ```
 
-If a suitable allocation is already running, use its node explicitly. Do not request a
-second allocation. If an agent needs a new allocation, use `sbatch` only to start a
-four-hour `sleep infinity` allocation holder on an explicitly selected partition. Never
-submit the actual build, test, or benchmark as an `sbatch` payload, and never hold an
-interactive `salloc` in a local terminal or tmux session. Computelab SSH may land on
-different login frontends, while the allocation holder persists independently.
+If a suitable allocation is already running, use its assigned node. Do not request a
+second allocation.
 
-Use the selector's batch mode:
+Before requesting a new allocation, inspect Blackwell nodes and their partitions, then
+choose one concrete partition. Select the **partition**, not a node; let SLURM place the
+job on a node in that partition.
 
 ```bash
-python3 scripts/salloc_select.py b300 --gpus 2 --host computelab \
-    --time 4:00:00 --sbatch --job-name codex-moe-test
+ssh computelab "sinfo -N -h -o '%N %P %T %G' | rg -i 'b200|b300|blackwell'"
+ssh computelab "squeue -u \$USER -h -o '%i %P %N %t %j'"
 ```
 
-This selects and passes a concrete partition to `sbatch`; its only payload is
-`sleep infinity`. The allocation may remain pending, so record the returned job ID, poll
-until it is running, and resolve its node:
+Submit exactly one four-hour batch allocation holder whose only payload is
+`sleep infinity`:
+
+```bash
+ssh computelab "sbatch --parsable \
+    -p <selected-blackwell-partition> \
+    --gpus 8 -N1 -t 4:00:00 -J codex-moe-test \
+    --wrap='sleep infinity'"
+```
+
+Do not use `scripts/salloc_select.py`, do not use interactive `salloc`, do not race
+partitions, and do not submit duplicate allocation requests. Record the returned job ID
+and poll that single job until it is running:
 
 ```bash
 ssh computelab "squeue -j <job-id> -h -o '%i %N %t %j'"
 ```
 
-After it starts, run the workload directly through the explicit node rather than through
-`sbatch`, then release only that agent-owned allocation holder:
+If it remains pending longer than expected, keep waiting and report its pending reason;
+do not submit another job. If it enters a terminal failure state, report the failure and
+request direction before submitting a replacement.
+
+After it starts, read the node that SLURM assigned to the partition-scoped job. Use that
+resolved node only for workload execution (never as an allocation constraint), then release
+only that agent-owned allocation holder:
 
 ```bash
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
@@ -116,7 +147,7 @@ ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
 ```
 
 The helper script automatically:
-1. Uses the explicit SLURM node (or discovers one only when `-n` is omitted)
+1. Uses the node assigned to the recorded SLURM job (pass it with `-n`)
 2. SSHs to it
 3. Launches the enroot container with mounts
 4. Activates `/workspace/venv` when the selected container provides it
@@ -140,7 +171,7 @@ cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP
 ### Step 4: Check GPU Status
 
 ```bash
-ssh computelab "ssh \$(squeue -u \$USER -h -o '%N' | head -1) 'nvidia-smi'"
+ssh computelab "ssh <allocated-node> 'nvidia-smi'"
 ```
 
 ## Common Tasks
@@ -152,7 +183,8 @@ both Blackwell targets used by the current B200/B300 allocations and retain comp
 unfiltered logs:
 
 ```bash
-ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh -c test_container_2606 \
+ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 \
     'cd /home/scratch.hhanyu_gpu/projects/moe/TE && \
      export PATH=/home/hhanyu/.pixi.x86_64/bin:\$PATH && \
      NVTE_BUILD_THREADS_PER_JOB=4 \
@@ -178,6 +210,7 @@ DeepEP has two compilation stages:
 
 ```bash
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 \
     'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
      PYTORCH_NVCC=\"ccache nvcc\" NVCC_APPEND_FLAGS=\"--threads 8\" \
      TORCH_CUDA_ARCH_LIST=\"10.3\" pip install --no-build-isolation . -v 2>&1 | tail -5'"
@@ -204,6 +237,7 @@ Build flags explained:
 
 ```bash
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 \
     'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
      rm -rf ~/.deepep/hybrid_ep/jit/ && \
      PYTORCH_NVCC=\"ccache nvcc\" NVCC_APPEND_FLAGS=\"--threads 8\" \
@@ -219,6 +253,7 @@ ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
 
 ```bash
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 \
     'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
      NUM_SMS_DISPATCH=24 NUM_SMS_COMBINE=24 HIDDEN_DIM=512 \
      NUM_TOKENS_PER_RANK=8192 NUM_LOCAL_EXPERTS=32 TOPK=36 \
@@ -282,6 +317,7 @@ rsync ~/projects/moe/DeepEP/ computelab:~/projects/moe/DeepEP/ -aPv \
 
 # 2. Rebuild + clear JIT + test (all in one, with complete persistent logs)
 ssh computelab "bash ~/projects/moe/scripts/run_on_compute.sh \
+    -n <allocated-node> -c test_container_2606 \
     'cd /home/scratch.hhanyu_gpu/projects/moe/DeepEP && \
      rm -rf ~/.deepep/hybrid_ep/jit/ && \
      PYTORCH_NVCC=\"ccache nvcc\" NVCC_APPEND_FLAGS=\"--threads 8\" \
