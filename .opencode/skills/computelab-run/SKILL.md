@@ -348,3 +348,190 @@ Set Bash tool timeout to at least 600000ms (10 min) for test runs.
 - **JIT compilation errors**: Clear JIT cache and rebuild: `rm -rf ~/.deepep/hybrid_ep/jit/ && pip install -e .`
 - **`cudaErrorIllegalAddress`**: Usually an asynchronous error from a previously launched kernel. Add `CUDA_LAUNCH_BLOCKING=1` to the command to pinpoint the faulting kernel.
 - **Stale code**: Verify rsync worked: `ssh computelab "cd ~/projects/moe/DeepEP && git diff --stat HEAD"` — should match local `git diff --stat HEAD`.
+
+## GCP-NRT Option
+
+Use this section instead of the computelab workflow when the user explicitly selects
+`gcp-nrt`.
+
+### Environment and paths
+
+- Login host: `gcp-nrt`
+- Required SLURM account: `coreai_devtech_all`
+- Validated partition: `batch`
+- Validated container: `dev_2604`
+- Persistent host storage: `/home/hhanyu/lustre` (also `~/lustre` on the login
+  host and compute node)
+- Container mount: `/home/hhanyu/lustre:/workspace/lustre`
+- Persistent container-visible source and logs: `/workspace/lustre/<task>`
+- Task venv convention: `/workspace/venv-<task>`; activate the exact venv used to
+  build the task's TE/cuDNN/CuTe stack rather than relying on system entrypoints.
+
+### Compiler cache
+
+The GCP-NRT ccache executable is `/home/hhanyu/.pixi.x86_64/bin/ccache`. Keep its
+directory on the login-shell `PATH` so node and enroot launches can resolve it:
+
+```bash
+ssh gcp-nrt 'grep -Fqx '\''export PATH="/home/hhanyu/.pixi.x86_64/bin:$PATH"'\'' ~/.bashrc || \
+  printf '\''%s\n'\'' '\''export PATH="/home/hhanyu/.pixi.x86_64/bin:$PATH"'\'' >> ~/.bashrc'
+ssh gcp-nrt 'source ~/.bashrc && command -v ccache && ccache --version'
+```
+
+For Transformer Engine builds, use the persistent cache under `~/scratch`:
+
+```bash
+export PATH="/home/hhanyu/.pixi.x86_64/bin:$PATH"
+export CCACHE_DIR="$HOME/scratch/.ccache"
+NVTE_USE_CCACHE=1 <other-build-environment> python -m pip install ...
+```
+
+The global `bin/ccache` is a Pixi trampoline. Inside enroot, bind the underlying
+ccache environment and the persistent cache, then use the real binary on `PATH`:
+
+```bash
+enroot start --rw \
+  -m /home/hhanyu/.pixi.x86_64/envs/ccache:/mnt \
+  -m /home/hhanyu/scratch/.ccache:/workspace/ccache \
+  <other-mounts> <container> bash
+export PATH="/mnt/bin:$PATH"
+export CCACHE_DIR=/workspace/ccache
+```
+
+Verify container dependencies and the exact imported source before testing. For a
+source checkout that must override installed packages, put it first in `PYTHONPATH`:
+
+```bash
+export PYTHONPATH=/workspace/lustre/<te-checkout>:.
+python - <<'PY'
+import inspect
+import torch
+import transformer_engine
+
+print(torch.__version__, torch.cuda.device_count())
+print(inspect.getfile(transformer_engine))
+PY
+```
+
+### Discover or request an allocation
+
+First inspect current allocations and reuse a suitable one when present:
+
+```bash
+ssh gcp-nrt 'squeue -u $USER -h -o "%i %T %N %L %j"'
+```
+
+For a new allocation, submit one non-interactive four-hour holder. The account is
+mandatory; an otherwise identical command without `--account=coreai_devtech_all`
+fails at submission.
+
+```bash
+# One GPU
+ssh gcp-nrt "sbatch \
+  --account=coreai_devtech_all \
+  --partition=batch \
+  --gres=gpu:1 \
+  --time=4:00:00 \
+  --job-name=codex-<task>-1gpu \
+  --wrap='sleep infinity'"
+
+# Eight GPUs on one node
+ssh gcp-nrt "sbatch \
+  --account=coreai_devtech_all \
+  --partition=batch \
+  --gres=gpu:8 \
+  --time=4:00:00 \
+  --job-name=codex-<task>-8gpu \
+  --wrap='sleep infinity'"
+```
+
+Record the returned job ID and poll that job; do not submit duplicates while it is
+pending:
+
+```bash
+ssh gcp-nrt 'squeue -j <job-id> -h -o "%i %T %N %L %R"'
+```
+
+Use the node only after the job reaches `RUNNING`. Do not use interactive `salloc`.
+
+### Sync source to persistent storage
+
+Keep Git operations local. Sync source content to a task directory under `~/lustre`
+and exclude Git metadata so remote testing cannot mutate the local branch history:
+
+```bash
+rsync -a --delete \
+  --exclude='.git/' \
+  --exclude='__pycache__/' \
+  --exclude='.pytest_cache/' \
+  /path/to/local/worktree/ \
+  gcp-nrt:~/lustre/<task>/
+```
+
+Omit `--delete` when the target contains build products or logs that must be retained.
+For a small follow-up, `rsync -aR <changed-files...> gcp-nrt:~/lustre/<task>/`
+updates only the listed paths.
+
+### Enter the allocated node and container
+
+Use the node returned by `squeue`:
+
+```bash
+ssh gcp-nrt
+ssh <allocated-node>
+enroot start --rw \
+  -m /home/hhanyu/lustre:/workspace/lustre \
+  dev_2604 bash
+```
+
+For a non-interactive run from the Mac:
+
+```bash
+ssh gcp-nrt 'ssh <allocated-node> \
+  "enroot start --rw \
+    -m /home/hhanyu/lustre:/workspace/lustre \
+    dev_2604 bash -lc '\''<command>'\''"'
+```
+
+Inside the container, activate the task venv, force exact source imports, and run
+from the synced worktree:
+
+```bash
+source /workspace/venv-<task>/bin/activate
+export PYTHONPATH=/workspace/lustre/<te-checkout>:.
+cd /workspace/lustre/<mlm-worktree>
+```
+
+For distributed tests, use the venv interpreter rather than a system `torchrun`:
+
+```bash
+python -m torch.distributed.run --standalone --nproc_per_node=8 \
+  -m pytest -xvs <test-file> -k <selection>
+```
+
+### Logging
+
+Persist complete, unfiltered output under the shared task directory. Do not pipe a
+live build or test through `rg`, `grep`, `tail`, or another filter. Inspect the log
+only after the process exits.
+
+```bash
+mkdir -p /workspace/lustre/<task>/logs
+set -o pipefail
+python -m pytest -xvs <tests...> 2>&1 | \
+  tee /workspace/lustre/<task>/logs/<run-name>.log
+```
+
+### Release the allocation
+
+Cancel only the allocation created for the current task. Release an eight-GPU holder
+immediately after its last test; do not leave it idle.
+
+```bash
+ssh gcp-nrt 'scancel <job-id>'
+ssh gcp-nrt 'squeue -j <job-id> -h -o "%i %T %N"'
+ssh gcp-nrt 'sacct -j <job-id> --format=JobID,State,Elapsed,NodeList -n -P'
+```
+
+Wait until `squeue` is empty and use `sacct` to confirm the terminal state. Do not
+cancel allocations owned by another task or user.
