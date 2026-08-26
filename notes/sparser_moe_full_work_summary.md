@@ -81,7 +81,7 @@ The first full profile made the imbalance visible:
 The expert MLP was not the dominant cost. Router and expert-parallel work together consumed
 far more captured GPU time, so optimizing only GEMM would have missed the critical path.
 
-![HybridEP workflow](final_presentation/assets/hybrid_ep_workflow.svg)
+![HybridEP workflow](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/hybrid_ep_workflow.svg)
 
 The end-to-end ownership is split across three repositories:
 
@@ -118,7 +118,7 @@ finds the bucket containing the kth threshold, and narrows the candidate prefix.
 tracks the expert row plus a bounded number of histogram passes rather than rescanning the
 full row once per selected expert.
 
-That work became [Transformer Engine #2821](https://github.com/NVIDIA/TransformerEngine/pull/2821).
+That work became https://.
 For the target shape, the forward router kernels improved by more than 10x, and the
 historical full-model result moved from about 92 to about 158 TFLOP/s/GPU. The same router
 fix was useful outside this experiment, including large-expert Nemotron work.
@@ -138,7 +138,7 @@ The next router phase addressed forward and backward together. The main changes 
   cases.
 
 The final B300 effective-bandwidth results from
-[TE #3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) show why this needed to
+https:// show why this needed to
 cover backward rather than only selection:
 
 | Kernel | Shape | Before | After | Improvement |
@@ -151,8 +151,8 @@ cover backward rather than only selection:
 
 The small-k row shows that the dispatch policy retained parity instead of forcing radix
 selection everywhere. The complete local benchmark
-and implementation record is in [TE fused-router optimization](te_fused_router_optimization.md)
-and [final router results](te_fused_router_p3R_results.md).
+and implementation record is in [TE fused-router optimization](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/te_fused_router_optimization.md)
+and [final router results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/te_fused_router_p3R_results.md).
 
 ## 3. Phase two: make the routing representation sparse
 
@@ -173,7 +173,7 @@ The compact representation is a **32x logical metadata reduction** at the target
 More importantly, it changes the algorithmic interface: downstream code can traverse the
 selected expert IDs directly rather than search an expert-wide bitmap.
 
-[TE #3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) added optional dense
+https:// added optional dense
 `topk_indices` output and matching backward support. “Dense” here means a dense list of
 selected IDs shaped `[T,K]`; it is compact compared with the sparse boolean `[T,E]` map.
 
@@ -197,8 +197,8 @@ the **expert** TP group. Using expert TP in the gate prevents dense routing from
 selected above the 32,768-ID limit.
 
 The final focused MCore work is in
-[#6614](https://github.com/NVIDIA/Megatron-LM/pull/6614) for `dev` and
-[#6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) for `main`. At the 2026/08/26
+https:// for `dev` and
+https:// for `main`. At the 2026/08/26
 snapshot both are open and mergeable. Focused suites passed 27/27 on both branches; real
 eight-rank tests passed the bool route, dense-index route, and dense expert-bias paths on
 every worker.
@@ -280,7 +280,7 @@ control overhead was a large fraction of the kernel:
 | Unpermute, H=7168 | 1475 us | 1098 us | 1.34x |
 
 The production path kept permute and unpermute as standalone kernels. An independently
-upstreamed ballot traversal in [DeepEP #625](https://github.com/deepseek-ai/DeepEP/pull/625)
+upstreamed ballot traversal in https://
 used the same approach.
 
 ### 4.3 Tune combine as a pipeline, not a single knob
@@ -344,8 +344,8 @@ Controlled default-to-tuned results:
 With both sparse preprocessing and combine tuning, dispatch+permute plus
 combine+unpermute fell from 1133.7 to 617.1 us, a 1.84x total improvement in the
 controlled study. Full details are in
-[HybridEP sparse optimization](hybrid-ep-sparse-opt-new.md) and
-[rebased bandwidth results](hybrid_ep_rebased_bw_results.md).
+[HybridEP sparse optimization](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid-ep-sparse-opt-new.md) and
+[rebased bandwidth results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid_ep_rebased_bw_results.md).
 
 ### 4.4 Replace dense-scan membership loops with bitsets
 
@@ -365,10 +365,10 @@ local-expert bitset improved tested fused-scan templates by 2.37x-2.98x; the ran
 improved the no-permute `512/108` scan from 525.6 to 331.7 us (1.58x).
 
 The dense top-k scan path merged as
-[DeepEP #673](https://github.com/deepseek-ai/DeepEP/pull/673). Distributed BF16 and FP8
+https://. Distributed BF16 and FP8
 correctness passed for dispatch/combine, selected-index routing, standalone and fused
-pre/post-processing. See [dense scan benchmarks](isolated-scan-bench.md) and
-[HybridEP dense-routing tests](hybrid_ep_dense_routing_pr_test_results.md).
+pre/post-processing. See [dense scan benchmarks](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/isolated-scan-bench.md) and
+[HybridEP dense-routing tests](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid_ep_dense_routing_pr_test_results.md).
 
 ## 5. Runtime interaction: CUDA graphs, 1F1B, and skew
 
@@ -396,7 +396,7 @@ An early deferred-release approach brought memory back to about 107.8 GiB. Later
 showed that a custom allocator patch was unnecessary because the supported PyTorch
 mechanism addresses the practical case. The root-cause analysis and correctness boundary
 are documented in
-[`record_stream()` investigation](record_stream_removal.md).
+[`record_stream()` investigation](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/record_stream_removal.md).
 
 ### 5.2 Full-iteration graphs exposed, but did not create, cross-rank skew
 
@@ -408,7 +408,7 @@ cross-rank skew when compute and communication contested SMs.
 Switching the grouped-expert GEMM path changed that contention enough to mitigate the
 observed skew. This is another system-level lesson: a faster compute kernel can improve
 communication overlap even when it does not touch the communication code. The complete
-analysis is in [NVL72 graph-vs-eager report](../reports/nvl72_cg_vs_nocg_report.md).
+analysis is in [NVL72 graph-vs-eager report](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/reports/nvl72_cg_vs_nocg_report.md).
 
 ## 6. Negative results that narrowed the design space
 
@@ -427,7 +427,7 @@ eliminates one local kernel but multiplies remote writes:
 The staged design writes one token per destination rank, then performs a local optimized
 permute. Direct-permute writes once per selected expert, producing scattered sectors and an
 L2-capacity cliff. It may still be interesting for much smaller `K` or larger `H`, but it is
-the wrong design for H=512/top-36. See [direct-permute NCU analysis](direct_permute_ncu_analysis.md).
+the wrong design for H=512/top-36. See [direct-permute NCU analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/direct_permute_ncu_analysis.md).
 
 ### 6.2 Fused dispatch/permute and combine/unpermute
 
@@ -489,13 +489,13 @@ routing-intensive models:
 | Qwen3.5 397B EP64 proxy | +2.6% | +5.3% | +4.9% |
 | Qwen3.5 397B sparser EP64 proxy | +8.1% | +10.9% | +9.7% |
 
-![Qwen3.5 Sparser 40B EP72](final_presentation/assets/qwen3_5_sparser_40b_ep72.png)
+![Qwen3.5 Sparser 40B EP72](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_sparser_40b_ep72.png)
 
-![Qwen3 Sparser 80B EP64](final_presentation/assets/qwen3_sparser_80b_ep64.png)
+![Qwen3 Sparser 80B EP64](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_sparser_80b_ep64.png)
 
-![Qwen3.5 397B EP64 proxy](final_presentation/assets/qwen3_5_397b_ep64_proxy.png)
+![Qwen3.5 397B EP64 proxy](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_ep64_proxy.png)
 
-![Qwen3.5 397B sparser EP64 proxy](final_presentation/assets/qwen3_5_397b_sparser_ep64_proxy.png)
+![Qwen3.5 397B sparser EP64 proxy](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_sparser_ep64_proxy.png)
 
 ### 7.4 Broader MoE-module matrix
 
@@ -511,7 +511,7 @@ full-model results:
 | Qwen397 Sparser EP64 | 826.2 | 1041.5 | +26.1% |
 | Qwen40 Sparser EP72 | 234.5 | 484.5 | +106.6% |
 
-![MoE-module performance matrix](final_presentation/assets/moe_module_perf_20260719.png)
+![MoE-module performance matrix](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/moe_module_perf_20260719.png)
 
 The matrix validates the expected trend: conventional 512-expert shapes still benefit,
 but the gain grows sharply when expert count, top-k, and small latent payloads make route
@@ -523,13 +523,13 @@ Status snapshot: 2026/08/26.
 
 | Repository / PR | Contribution | Status |
 | --- | --- | --- |
-| [TE #2821](https://github.com/NVIDIA/TransformerEngine/pull/2821) | Radix top-k foundation and large-shape router fix | Merged |
-| [TE #3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) | Async/persistent forward and fused backward optimization | Merged |
-| [TE #3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) | Optional selected-index output and backward support | Merged |
-| [DeepEP #625](https://github.com/deepseek-ai/DeepEP/pull/625) | Upstream standalone permute ballot traversal | Merged |
-| [DeepEP #673](https://github.com/deepseek-ai/DeepEP/pull/673) | Dense top-k routing scan | Merged |
-| [MCore #6614](https://github.com/NVIDIA/Megatron-LM/pull/6614) | Dense Flex routing on `dev` | Open, mergeable |
-| [MCore #6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) | Dense Flex routing on `main` | Open, mergeable |
+| https:// | Radix top-k foundation and large-shape router fix | Merged |
+| https:// | Async/persistent forward and fused backward optimization | Merged |
+| https:// | Optional selected-index output and backward support | Merged |
+| https:// | Upstream standalone permute ballot traversal | Merged |
+| https:// | Dense top-k routing scan | Merged |
+| https:// | Dense Flex routing on `dev` | Open, mergeable |
+| https:// | Dense Flex routing on `main` | Open, mergeable |
 
 The TE PRs were already merged by the 2026/06/29 T5T. The post-June status movement was
 the DeepEP scan merge and the extraction/validation of the paired MCore integration PRs.
@@ -538,16 +538,16 @@ Relevant source entry points:
 
 | Layer | Source |
 | --- | --- |
-| TE radix helpers | [`utils.h`](../TE/transformer_engine/common/fused_router/utils.h) |
-| TE async loader | [`async_loader.h`](../TE/transformer_engine/common/fused_router/async_loader.h) |
-| TE route launch/dense output | [`fused_topk_with_score_function.cu`](../TE/transformer_engine/common/fused_router/fused_topk_with_score_function.cu) |
-| TE PyTorch route API | [`router.cpp`](../TE/transformer_engine/pytorch/csrc/extensions/router.cpp) |
-| MCore capability gate | [`router.py`](../MLM/megatron/core/transformer/moe/router.py) |
-| MCore HybridEP forwarding | [`fused_a2a.py`](../MLM/megatron/core/transformer/moe/fused_a2a.py) |
-| DeepEP permute/unpermute | [`permute.cu`](../DeepEP/csrc/hybrid_ep/extension/permute.cu) |
-| DeepEP custom all-gather | [`allgather.cu`](../DeepEP/csrc/hybrid_ep/extension/allgather.cu) |
-| DeepEP route scan | [`hybrid_ep_backend.cuh`](../DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh) |
-| DeepEP combine configuration | [`config.cuh`](../DeepEP/csrc/hybrid_ep/config.cuh) |
+| TE radix helpers |  |
+| TE async loader |  |
+| TE route launch/dense output |  |
+| TE PyTorch route API |  |
+| MCore capability gate |  |
+| MCore HybridEP forwarding |  |
+| DeepEP permute/unpermute |  |
+| DeepEP custom all-gather |  |
+| DeepEP route scan |  |
+| DeepEP combine configuration |  |
 
 ## 9. Validation record
 
@@ -621,25 +621,25 @@ The main bottlenecks for this workload are addressed. Remaining work includes:
 
 Supporting records:
 
-- [Final presentation content and claims map](final_presentation/sparser_moe_final_presentation_content.md)
-- [TE fused-router optimization](te_fused_router_optimization.md)
-- [TE final router benchmark](te_fused_router_p3R_results.md)
-- [HybridEP sparse optimization](hybrid-ep-sparse-opt-new.md)
-- [HybridEP rebased results](hybrid_ep_rebased_bw_results.md)
-- [Dense scan benchmarks](isolated-scan-bench.md)
-- [Direct-permute NCU analysis](direct_permute_ncu_analysis.md)
-- [Full-iteration NVL72 analysis](../reports/nvl72_cg_vs_nocg_report.md)
-- [`record_stream()` / CUDA graph investigation](record_stream_removal.md)
-- [June 8 T5T](top5_things_2026_06_08.md)
-- [June 29 T5T](top5_things_2026_06_29.md)
-- [Confluence T5T transcript](../reports/top5_confluence_transcript.md)
-- [Published evidence notebook](top5_since_2026_06_29/evidence.md), containing the
+- [Final presentation content and claims map](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/sparser_moe_final_presentation_content.md)
+- [TE fused-router optimization](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/te_fused_router_optimization.md)
+- [TE final router benchmark](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/te_fused_router_p3R_results.md)
+- [HybridEP sparse optimization](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid-ep-sparse-opt-new.md)
+- [HybridEP rebased results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid_ep_rebased_bw_results.md)
+- [Dense scan benchmarks](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/isolated-scan-bench.md)
+- [Direct-permute NCU analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/direct_permute_ncu_analysis.md)
+- [Full-iteration NVL72 analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/reports/nvl72_cg_vs_nocg_report.md)
+- [`record_stream()` / CUDA graph investigation](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/record_stream_removal.md)
+- [June 8 T5T](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/top5_things_2026_06_08.md)
+- [June 29 T5T](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/top5_things_2026_06_29.md)
+- [Confluence T5T transcript](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/reports/top5_confluence_transcript.md)
+- [Published evidence notebook](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/top5_since_2026_06_29/evidence.md), containing the
   sanitized July MoE-module and canonical-matrix measurements used above
 
 Related shared documents:
 
-- [Sparser MoE working document](https://docs.google.com/document/d/1iRopu2nZdLAUNSmLzGAjHYTIESVbuQ7uKsXyyYMIFO4/edit)
-- [TE fused-router optimization document](https://docs.google.com/document/d/1oFisyasi469EG_3ExL4LF0ioIru6Hy8UV0JS2UGVruo/edit)
+- https://
+- https://
 
 The measurements retain the scope used in their source records. Future results should
 update the matched table and provenance without rewriting the historical snapshots as if

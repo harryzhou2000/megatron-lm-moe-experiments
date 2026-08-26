@@ -3,7 +3,7 @@
 ## Scope
 
 This note connects Kimi K3's MoE design in the
-[Kimi K3 Technical Report](https://github.com/MoonshotAI/Kimi-K3/blob/main/k3_tech_report.pdf)
+https://
 to the corresponding cuDNN Frontend, Transformer Engine (TE), and Megatron Core (MCore)
 implementation work.
 
@@ -149,8 +149,8 @@ It is **not** `RMSNorm(W_up(u))`, and it is not a norm before `W_down`.
 ### 2.3 MCore implementation
 
 The paired latent-RMSNorm PRs are
-[MCore #6804](https://github.com/NVIDIA/Megatron-LM/pull/6804) (`dev`) and
-[#6803](https://github.com/NVIDIA/Megatron-LM/pull/6803) (`main`). They add an opt-in
+https:// (`dev`) and
+https:// (`main`). They add an opt-in
 `moe_latent_up_projection_rmsnorm` selector and use a thin MCore wrapper around TE
 `LayerNormLinear(normalization="RMSNorm")` for the duplicated latent up-projection.
 
@@ -342,7 +342,7 @@ This is an implementation optimization, not a change to the report's activation.
 
 ### 4.1 cuDNN Frontend
 
-[cuDNN Frontend #645](https://github.com/NVIDIA/cudnn-frontend/pull/645) merged grouped
+https:// merged grouped
 SiTU-GLU and dSiTU-GLU into the existing block-scaled CuTe DSL grouped-GEMM epilogues.
 It supports the probability-weighted activation and its `dprob` path without materializing
 an intermediate activation or adding another kernel launch.
@@ -355,13 +355,13 @@ The PR also:
 - retains FP32 tanh because a tested packed-FP16 candidate regressed performance and failed
   the FP32 probability-gradient reference.
 
-[cuDNN Frontend #670](https://github.com/NVIDIA/cudnn-frontend/pull/670) merged follow-up
+https:// merged follow-up
 API-contract fixes: compiled beta reuse, validation before empty-input fast returns, and the
 probability factor in the documented Hadamard equation.
 
 ### 4.2 Transformer Engine
 
-[TE #3402](https://github.com/NVIDIA/TransformerEngine/pull/3402) merged native and scaled
+https:// merged native and scaled
 SiTU-GLU operations, Python bindings, quantized paths, and grouped-MLP integration.
 
 TE owns the backend decision:
@@ -380,8 +380,8 @@ scaled-activation matrix passed 188 cases with 68 expected skips and zero failur
 
 ### 4.3 Megatron Core
 
-The paired MCore PRs are [#6673](https://github.com/NVIDIA/Megatron-LM/pull/6673)
-(`dev`) and [#6674](https://github.com/NVIDIA/Megatron-LM/pull/6674) (`main`). They make
+The paired MCore PRs are https://
+(`dev`) and https:// (`main`). They make
 SiTU-GLU a model-wide FFN activation rather than an MoE-only backend flag.
 
 The selector reaches:
@@ -657,7 +657,7 @@ answer.
 
 ### 7.1 Transformer Engine
 
-[TE #3395](https://github.com/NVIDIA/TransformerEngine/pull/3395) merged two histogram
+https:// merged two histogram
 paths:
 
 - `two_kernel`: the router emits `alpha`, then a second kernel rereads raw scores and
@@ -675,8 +675,8 @@ than two-kernel, with one 4096-token dense case effectively tied.
 
 ### 7.2 Megatron Core
 
-The paired current PRs are [MCore #6637](https://github.com/NVIDIA/Megatron-LM/pull/6637)
-(`dev`) and [#6638](https://github.com/NVIDIA/Megatron-LM/pull/6638) (`main`). They add
+The paired current PRs are https://
+(`dev`) and https:// (`main`). They add
 `quantile_balancing` as an auxiliary-loss-free router mode with global-batch estimation.
 
 Each router owns:
@@ -724,13 +724,13 @@ Status snapshot: 2026/08/26.
 
 | Mechanism | Repository / PR | Contribution | Status |
 | --- | --- | --- | --- |
-| SiTU-GLU | [cuDNN Frontend #645](https://github.com/NVIDIA/cudnn-frontend/pull/645) | Fused grouped SiTU/dSiTU epilogues | Merged |
-| SiTU-GLU | [cuDNN Frontend #670](https://github.com/NVIDIA/cudnn-frontend/pull/670) | Hadamard/beta API fixes | Merged |
-| SiTU-GLU | [TE #3402](https://github.com/NVIDIA/TransformerEngine/pull/3402) | Native/scaled SiTU and grouped integration | Merged |
-| SiTU-GLU | [MCore #6673](https://github.com/NVIDIA/Megatron-LM/pull/6673) / [#6674](https://github.com/NVIDIA/Megatron-LM/pull/6674) | Model-wide activation integration on `dev` / `main` | Open |
-| QB | [TE #3395](https://github.com/NVIDIA/TransformerEngine/pull/3395) | Top-(k+1) histogram router paths | Merged |
-| QB | [MCore #6637](https://github.com/NVIDIA/Megatron-LM/pull/6637) / [#6638](https://github.com/NVIDIA/Megatron-LM/pull/6638) | Global-batch bias lifecycle on `dev` / `main` | Open |
-| Latent RMSNorm | [MCore #6804](https://github.com/NVIDIA/Megatron-LM/pull/6804) / [#6803](https://github.com/NVIDIA/Megatron-LM/pull/6803) | RMSNorm + duplicated latent up-projection | Open |
+| SiTU-GLU | https:// | Fused grouped SiTU/dSiTU epilogues | Merged |
+| SiTU-GLU | https:// | Hadamard/beta API fixes | Merged |
+| SiTU-GLU | https:// | Native/scaled SiTU and grouped integration | Merged |
+| SiTU-GLU | https:// / https:// | Model-wide activation integration on `dev` / `main` | Open |
+| QB | https:// | Top-(k+1) histogram router paths | Merged |
+| QB | https:// / https:// | Global-batch bias lifecycle on `dev` / `main` | Open |
+| Latent RMSNorm | https:// / https:// | RMSNorm + duplicated latent up-projection | Open |
 
 Validation highlights:
 
@@ -766,18 +766,18 @@ not support presenting QB or SiTU-GLU alone as a large model-throughput optimiza
 
 ### Primary report
 
-- [Kimi K3 repository and model summary](https://github.com/MoonshotAI/Kimi-K3)
-- [Kimi K3 Technical Report](https://github.com/MoonshotAI/Kimi-K3/blob/main/k3_tech_report.pdf)
+- https://
+- https://
   - Stable LatentMoE: Section 2.3 and Eq. 11
   - SiTU-GLU: Section 2.3.2, Eq. 12, and Appendix B (Eqs. 18-19)
   - Quantile Balancing: Section 2.3.3, Eqs. 13-14, and Appendices C-D
 
 ### Implementation records
 
-- [Stable LatentMoE implementation record](kimi_k3_moe_implementation.md)
-- [QB histogram implementation plan](kimi_k3_qb_router_histogram_plan.md)
-- [QB correctness and performance results](kimi_k3_qb_router_histogram_results.md)
-- [K3 work evidence notebook](top5_since_2026_06_29/evidence.md)
+- [Stable LatentMoE implementation record](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/kimi_k3_moe_implementation.md)
+- [QB histogram implementation plan](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/kimi_k3_qb_router_histogram_plan.md)
+- [QB correctness and performance results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/kimi_k3_qb_router_histogram_results.md)
+- [K3 work evidence notebook](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/top5_since_2026_06_29/evidence.md)
 
 ### Ownership by layer
 
