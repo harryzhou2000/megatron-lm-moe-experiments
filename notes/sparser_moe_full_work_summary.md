@@ -118,7 +118,7 @@ finds the bucket containing the kth threshold, and narrows the candidate prefix.
 tracks the expert row plus a bounded number of histogram passes rather than rescanning the
 full row once per selected expert.
 
-That work became https://.
+That work became [Transformer Engine #2821](https://github.com/NVIDIA/TransformerEngine/pull/2821).
 For the target shape, the forward router kernels improved by more than 10x, and the
 historical full-model result moved from about 92 to about 158 TFLOP/s/GPU. The same router
 fix was useful outside this experiment, including large-expert Nemotron work.
@@ -138,7 +138,7 @@ The next router phase addressed forward and backward together. The main changes 
   cases.
 
 The final B300 effective-bandwidth results from
-https:// show why this needed to
+[TE #3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) show why this needed to
 cover backward rather than only selection:
 
 | Kernel | Shape | Before | After | Improvement |
@@ -173,7 +173,7 @@ The compact representation is a **32x logical metadata reduction** at the target
 More importantly, it changes the algorithmic interface: downstream code can traverse the
 selected expert IDs directly rather than search an expert-wide bitmap.
 
-https:// added optional dense
+[TE #3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) added optional dense
 `topk_indices` output and matching backward support. “Dense” here means a dense list of
 selected IDs shaped `[T,K]`; it is compact compared with the sparse boolean `[T,E]` map.
 
@@ -197,8 +197,8 @@ the **expert** TP group. Using expert TP in the gate prevents dense routing from
 selected above the 32,768-ID limit.
 
 The final focused MCore work is in
-https:// for `dev` and
-https:// for `main`. At the 2026/08/26
+[#6614](https://github.com/NVIDIA/Megatron-LM/pull/6614) for `dev` and
+[#6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) for `main`. At the 2026/08/26
 snapshot both are open and mergeable. Focused suites passed 27/27 on both branches; real
 eight-rank tests passed the bool route, dense-index route, and dense expert-bias paths on
 every worker.
@@ -280,7 +280,7 @@ control overhead was a large fraction of the kernel:
 | Unpermute, H=7168 | 1475 us | 1098 us | 1.34x |
 
 The production path kept permute and unpermute as standalone kernels. An independently
-upstreamed ballot traversal in https://
+upstreamed ballot traversal in [DeepEP #625](https://github.com/deepseek-ai/DeepEP/pull/625)
 used the same approach.
 
 ### 4.3 Tune combine as a pipeline, not a single knob
@@ -365,7 +365,7 @@ local-expert bitset improved tested fused-scan templates by 2.37x-2.98x; the ran
 improved the no-permute `512/108` scan from 525.6 to 331.7 us (1.58x).
 
 The dense top-k scan path merged as
-https://. Distributed BF16 and FP8
+[DeepEP #673](https://github.com/deepseek-ai/DeepEP/pull/673). Distributed BF16 and FP8
 correctness passed for dispatch/combine, selected-index routing, standalone and fused
 pre/post-processing. See [dense scan benchmarks](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/isolated-scan-bench.md) and
 [HybridEP dense-routing tests](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/hybrid_ep_dense_routing_pr_test_results.md).
@@ -523,13 +523,13 @@ Status snapshot: 2026/08/26.
 
 | Repository / PR | Contribution | Status |
 | --- | --- | --- |
-| https:// | Radix top-k foundation and large-shape router fix | Merged |
-| https:// | Async/persistent forward and fused backward optimization | Merged |
-| https:// | Optional selected-index output and backward support | Merged |
-| https:// | Upstream standalone permute ballot traversal | Merged |
-| https:// | Dense top-k routing scan | Merged |
-| https:// | Dense Flex routing on `dev` | Open, mergeable |
-| https:// | Dense Flex routing on `main` | Open, mergeable |
+| [TE #2821](https://github.com/NVIDIA/TransformerEngine/pull/2821) | Radix top-k foundation and large-shape router fix | Merged |
+| [TE #3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) | Async/persistent forward and fused backward optimization | Merged |
+| [TE #3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) | Optional selected-index output and backward support | Merged |
+| [DeepEP #625](https://github.com/deepseek-ai/DeepEP/pull/625) | Upstream standalone permute ballot traversal | Merged |
+| [DeepEP #673](https://github.com/deepseek-ai/DeepEP/pull/673) | Dense top-k routing scan | Merged |
+| [MCore #6614](https://github.com/NVIDIA/Megatron-LM/pull/6614) | Dense Flex routing on `dev` | Open, mergeable |
+| [MCore #6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) | Dense Flex routing on `main` | Open, mergeable |
 
 The TE PRs were already merged by the 2026/06/29 T5T. The post-June status movement was
 the DeepEP scan merge and the extraction/validation of the paired MCore integration PRs.
@@ -538,16 +538,16 @@ Relevant source entry points:
 
 | Layer | Source |
 | --- | --- |
-| TE radix helpers |  |
-| TE async loader |  |
-| TE route launch/dense output |  |
-| TE PyTorch route API |  |
-| MCore capability gate |  |
-| MCore HybridEP forwarding |  |
-| DeepEP permute/unpermute |  |
-| DeepEP custom all-gather |  |
-| DeepEP route scan |  |
-| DeepEP combine configuration |  |
+| TE radix helpers | [`utils.h`](../TE/transformer_engine/common/fused_router/utils.h) |
+| TE async loader | [`async_loader.h`](../TE/transformer_engine/common/fused_router/async_loader.h) |
+| TE route launch/dense output | [`fused_topk_with_score_function.cu`](../TE/transformer_engine/common/fused_router/fused_topk_with_score_function.cu) |
+| TE PyTorch route API | [`router.cpp`](../TE/transformer_engine/pytorch/csrc/extensions/router.cpp) |
+| MCore capability gate | [`router.py`](../MLM/megatron/core/transformer/moe/router.py) |
+| MCore HybridEP forwarding | [`fused_a2a.py`](../MLM/megatron/core/transformer/moe/fused_a2a.py) |
+| DeepEP permute/unpermute | [`permute.cu`](../DeepEP/csrc/hybrid_ep/extension/permute.cu) |
+| DeepEP custom all-gather | [`allgather.cu`](../DeepEP/csrc/hybrid_ep/extension/allgather.cu) |
+| DeepEP route scan | [`hybrid_ep_backend.cuh`](../DeepEP/csrc/hybrid_ep/backend/hybrid_ep_backend.cuh) |
+| DeepEP combine configuration | [`config.cuh`](../DeepEP/csrc/hybrid_ep/config.cuh) |
 
 ## 9. Validation record
 
@@ -638,8 +638,8 @@ Supporting records:
 
 Related shared documents:
 
-- https://
-- https://
+- [Sparser MoE working document](https://docs.google.com/document/d/1iRopu2nZdLAUNSmLzGAjHYTIESVbuQ7uKsXyyYMIFO4/edit)
+- [TE fused-router optimization document](https://docs.google.com/document/d/1oFisyasi469EG_3ExL4LF0ioIru6Hy8UV0JS2UGVruo/edit)
 
 The measurements retain the scope used in their source records. Future results should
 update the matched table and provenance without rewriting the historical snapshots as if

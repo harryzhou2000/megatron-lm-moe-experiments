@@ -18,7 +18,7 @@ Evidence snapshot date: **2026/08/26**.
 
 - [Top 5 Things 2026/06/29](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/top5_things_2026_06_29.md)
 - [Confluence Top 5 transcript](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/reports/top5_confluence_transcript.md)
-- Live Confluence page: https://
+- Live Confluence page: [Top 5 Things 2026/06/29](https://nvidia.atlassian.net/wiki/spaces/~712020753b3a7633654afeb025f6cc042701ce/pages/3646653538)
 - [Final Sparser MoE presentation content](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/sparser_moe_final_presentation_content.md)
 - [Internship midpoint Sparser MoE report](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/reports/internship_midpoint_sparser_moe_progress.md)
 
@@ -51,13 +51,13 @@ Evidence snapshot date: **2026/08/26**.
 The June 29 page named TE router PRs #3012 and #3129 and left downstream integration as
 follow-through work. The later work closed or advanced the remaining layers:
 
-- DeepEP dense top-k scan https:// was
+- DeepEP dense top-k scan [#673](https://github.com/deepseek-ai/DeepEP/pull/673) was
   created on 2026/06/29 and merged on 2026/08/05.
-- MCore dense-route propagation https://
-  (`dev`) and https:// (`main`) were
+- MCore dense-route propagation [#6614](https://github.com/NVIDIA/Megatron-LM/pull/6614)
+  (`dev`) and [#6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) (`main`) were
   opened on 2026/08/18. Both are open and mergeable at this snapshot.
-- TE https:// and
-  https:// were already merged
+- TE [#3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) and
+  [#3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) were already merged
   before the June 29 page. Do not describe them as newly merged after June 29; describe
   them as the completed TE layer of the now-wrapped stack.
 
@@ -138,19 +138,19 @@ The implemented K3 MoE slice consists of:
 
 Merged lower-stack PRs:
 
-- cuDNN Frontend https:// and
-  https://: grouped SiTU-GLU and API fixes.
-- TE https://: QB router histogram paths.
-- TE https://: SiTU-GLU activation.
+- cuDNN Frontend [#645](https://github.com/NVIDIA/cudnn-frontend/pull/645) and
+  [#670](https://github.com/NVIDIA/cudnn-frontend/pull/670): grouped SiTU-GLU and API fixes.
+- TE [#3395](https://github.com/NVIDIA/TransformerEngine/pull/3395): QB router histogram paths.
+- TE [#3402](https://github.com/NVIDIA/TransformerEngine/pull/3402): SiTU-GLU activation.
 
 Open MCore `dev`/`main` pairs:
 
-- SiTU-GLU: https:// /
-  https://.
-- Quantile Balancing: https:// /
-  https://.
-- Latent RMSNorm: https:// /
-  https://.
+- SiTU-GLU: [#6673](https://github.com/NVIDIA/Megatron-LM/pull/6673) /
+  [#6674](https://github.com/NVIDIA/Megatron-LM/pull/6674).
+- Quantile Balancing: [#6637](https://github.com/NVIDIA/Megatron-LM/pull/6637) /
+  [#6638](https://github.com/NVIDIA/Megatron-LM/pull/6638).
+- Latent RMSNorm: [#6804](https://github.com/NVIDIA/Megatron-LM/pull/6804) /
+  [#6803](https://github.com/NVIDIA/Megatron-LM/pull/6803).
 
 Validation highlights:
 
@@ -174,7 +174,7 @@ Validation highlights:
 - Eight-rank focused tests passed 38 tests per rank.
 - A three-step Qwen MoE/GDN EP8 run passed with MBS4/GBS32, finite LM/load-balancing loss,
   and zero skipped or NaN iterations.
-- Fork-local draft PR: https://,
+- Fork-local draft PR: [harryzhou2000/Megatron-LM#1](https://github.com/harryzhou2000/Megatron-LM/pull/1),
   open, draft, and mergeable at this snapshot.
 
 ## Additional T5T candidate
