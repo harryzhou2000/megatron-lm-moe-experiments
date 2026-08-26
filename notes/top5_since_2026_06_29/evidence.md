@@ -16,22 +16,22 @@ Evidence snapshot date: **2026/08/26**.
 
 ### Prior T5T and presentation material
 
-- [Top 5 Things 2026/06/29](../top5_things_2026_06_29.md)
-- [Confluence Top 5 transcript](../../reports/top5_confluence_transcript.md)
-- Live Confluence page: [Top 5 Things 2026/06/29](https://nvidia.atlassian.net/wiki/spaces/~712020753b3a7633654afeb025f6cc042701ce/pages/3646653538)
-- [Final Sparser MoE presentation content](../final_presentation/sparser_moe_final_presentation_content.md)
-- [Internship midpoint Sparser MoE report](../../reports/internship_midpoint_sparser_moe_progress.md)
+- [Top 5 Things 2026/06/29](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/top5_things_2026_06_29.md)
+- [Confluence Top 5 transcript](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/reports/top5_confluence_transcript.md)
+- Live Confluence page: https://
+- [Final Sparser MoE presentation content](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/final_presentation/sparser_moe_final_presentation_content.md)
+- [Internship midpoint Sparser MoE report](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/reports/internship_midpoint_sparser_moe_progress.md)
 
 ### Primary Sparser MoE technical records
 
-- [TE fused-router optimization](../te_fused_router_optimization.md)
-- [Final TE fused-router results](../te_fused_router_p3R_results.md)
-- [HybridEP sparse optimization and NCU analysis](../hybrid-ep-sparse-opt-new.md)
-- [Rebased HybridEP correctness and bandwidth](../hybrid_ep_rebased_bw_results.md)
-- [Dense scan benchmarks](../isolated-scan-bench.md)
-- [Direct-permute NCU analysis](../direct_permute_ncu_analysis.md)
-- [NVL72 CUDA-graph and skew analysis](../../reports/nvl72_cg_vs_nocg_report.md)
-- [CUDA-graph `record_stream()` investigation](../record_stream_removal.md)
+- [TE fused-router optimization](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/te_fused_router_optimization.md)
+- [Final TE fused-router results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/te_fused_router_p3R_results.md)
+- [HybridEP sparse optimization and NCU analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/hybrid-ep-sparse-opt-new.md)
+- [Rebased HybridEP correctness and bandwidth](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/hybrid_ep_rebased_bw_results.md)
+- [Dense scan benchmarks](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/isolated-scan-bench.md)
+- [Direct-permute NCU analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/direct_permute_ncu_analysis.md)
+- [NVL72 CUDA-graph and skew analysis](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/reports/nvl72_cg_vs_nocg_report.md)
+- [CUDA-graph `record_stream()` investigation](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/record_stream_removal.md)
 - July MoE-only benchmark evidence: the validated measurements are reproduced in the
   tables below; raw environment and job provenance is intentionally not republished.
 - July 30 canonical GB200/GB300 matrix evidence: the matched results are reproduced below
@@ -39,8 +39,8 @@ Evidence snapshot date: **2026/08/26**.
 
 ### Kimi K3 and multimodal records
 
-- [Kimi K3 Stable LatentMoE implementation](../kimi_k3_moe_implementation.md)
-- [K3 Quantile Balancing router histogram results](../kimi_k3_qb_router_histogram_results.md)
+- [Kimi K3 Stable LatentMoE implementation](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/kimi_k3_moe_implementation.md)
+- [K3 Quantile Balancing router histogram results](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/b842b63c05e4f427a98a2c45d89d55e8ae2208c7/notes/kimi_k3_qb_router_histogram_results.md)
 - Local and `nvhzdc7` history catalogs in `~/projects/summarize_agents`, queried for
   Sparser MoE, HybridEP, Kimi K3, Quantile Balancing, SiTU-GLU, latent RMSNorm,
   Qwen3.5 mock vision, and variable-length records. Only work outcomes are carried into
@@ -51,13 +51,13 @@ Evidence snapshot date: **2026/08/26**.
 The June 29 page named TE router PRs #3012 and #3129 and left downstream integration as
 follow-through work. The later work closed or advanced the remaining layers:
 
-- DeepEP dense top-k scan [#673](https://github.com/deepseek-ai/DeepEP/pull/673) was
+- DeepEP dense top-k scan https:// was
   created on 2026/06/29 and merged on 2026/08/05.
-- MCore dense-route propagation [#6614](https://github.com/NVIDIA/Megatron-LM/pull/6614)
-  (`dev`) and [#6615](https://github.com/NVIDIA/Megatron-LM/pull/6615) (`main`) were
+- MCore dense-route propagation https://
+  (`dev`) and https:// (`main`) were
   opened on 2026/08/18. Both are open and mergeable at this snapshot.
-- TE [#3012](https://github.com/NVIDIA/TransformerEngine/pull/3012) and
-  [#3129](https://github.com/NVIDIA/TransformerEngine/pull/3129) were already merged
+- TE https:// and
+  https:// were already merged
   before the June 29 page. Do not describe them as newly merged after June 29; describe
   them as the completed TE layer of the now-wrapped stack.
 
@@ -138,19 +138,19 @@ The implemented K3 MoE slice consists of:
 
 Merged lower-stack PRs:
 
-- cuDNN Frontend [#645](https://github.com/NVIDIA/cudnn-frontend/pull/645) and
-  [#670](https://github.com/NVIDIA/cudnn-frontend/pull/670): grouped SiTU-GLU and API fixes.
-- TE [#3395](https://github.com/NVIDIA/TransformerEngine/pull/3395): QB router histogram paths.
-- TE [#3402](https://github.com/NVIDIA/TransformerEngine/pull/3402): SiTU-GLU activation.
+- cuDNN Frontend https:// and
+  https://: grouped SiTU-GLU and API fixes.
+- TE https://: QB router histogram paths.
+- TE https://: SiTU-GLU activation.
 
 Open MCore `dev`/`main` pairs:
 
-- SiTU-GLU: [#6673](https://github.com/NVIDIA/Megatron-LM/pull/6673) /
-  [#6674](https://github.com/NVIDIA/Megatron-LM/pull/6674).
-- Quantile Balancing: [#6637](https://github.com/NVIDIA/Megatron-LM/pull/6637) /
-  [#6638](https://github.com/NVIDIA/Megatron-LM/pull/6638).
-- Latent RMSNorm: [#6804](https://github.com/NVIDIA/Megatron-LM/pull/6804) /
-  [#6803](https://github.com/NVIDIA/Megatron-LM/pull/6803).
+- SiTU-GLU: https:// /
+  https://.
+- Quantile Balancing: https:// /
+  https://.
+- Latent RMSNorm: https:// /
+  https://.
 
 Validation highlights:
 
@@ -174,7 +174,7 @@ Validation highlights:
 - Eight-rank focused tests passed 38 tests per rank.
 - A three-step Qwen MoE/GDN EP8 run passed with MBS4/GBS32, finite LM/load-balancing loss,
   and zero skipped or NaN iterations.
-- Fork-local draft PR: [harryzhou2000/Megatron-LM#1](https://github.com/harryzhou2000/Megatron-LM/pull/1),
+- Fork-local draft PR: https://,
   open, draft, and mergeable at this snapshot.
 
 ## Additional T5T candidate
