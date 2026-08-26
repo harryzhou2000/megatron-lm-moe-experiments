@@ -603,21 +603,28 @@ cannot attribute the gain to one kernel without the lower-level measurements.
 - Keep metadata representation and collective choice as independent controls.
 - Validate real distributed topology before classifying a failure as a transport defect.
 
-## 11. Remaining opportunities
+## 11. Remaining performance opportunities
 
-The main bottlenecks for this workload are addressed. Remaining work includes:
+The next performance questions are mainly about skew, communication, and overlap under
+real model routing:
 
-- merge and release the MCore dense-route integration so users do not need a feature branch;
-- test more expert-count/top-k boundaries and mixed expert-TP layouts;
-- investigate a deeper combine redesign that reduces remote-read round trips or barrier cost,
-  rather than only increasing queue depth;
-- revisit direct placement only if a design avoids per-expert remote-write amplification;
-- use the canonical 2,304E/2,048E matrix as regression coverage for future TE, MCore,
-  DeepEP, grouped-GEMM, and CUDA-graph changes;
-- keep full-model attribution staged so later runtime or kernel updates can be separated
-  cleanly from the compact-routing gains.
+- characterize model-induced expert and rank imbalance across layers, training phases,
+  sequence lengths, and data mixtures, then connect the observed skew to exposed GEMM,
+  communication, and synchronization time;
+- investigate dynamic balancing against the model's actual post-router distribution rather
+  than idealized routing. ECHO, UltraEP, and MoonEP are candidate directions for hot-expert
+  replication, dynamically planned redundant experts, and token redistribution;
+- measure dynamic balancing as a complete path, including plan generation, expert-weight
+  movement or replication, rerouting, extra memory, and the compute or communication time
+  recovered on the critical rank;
+- redesign combine to reduce remote-read round trips and barrier cost rather than only
+  increasing queue depth, especially when model-induced skew creates uneven producers;
+- co-tune grouped expert GEMMs, dispatch/combine SM allocation, and communication overlap
+  for different expert-count, top-k, latent-width, and expert-TP regimes;
+- revisit direct placement only if the design avoids per-expert remote-write amplification
+  and remains beneficial under the measured routing distribution.
 
-## 12. Evidence map
+## 12. Other Materials
 
 Supporting records:
 
