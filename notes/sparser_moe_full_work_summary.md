@@ -81,7 +81,7 @@ The first full profile made the imbalance visible:
 The expert MLP was not the dominant cost. Router and expert-parallel work together consumed
 far more captured GPU time, so optimizing only GEMM would have missed the critical path.
 
-![HybridEP workflow](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/hybrid_ep_workflow.svg)
+![HybridEP workflow](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/hybrid_ep_workflow.svg)
 
 The end-to-end ownership is split across three repositories:
 
@@ -489,13 +489,13 @@ routing-intensive models:
 | Qwen3.5 397B EP64 proxy | +2.6% | +5.3% | +4.9% |
 | Qwen3.5 397B sparser EP64 proxy | +8.1% | +10.9% | +9.7% |
 
-![Qwen3.5 Sparser 40B EP72](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_sparser_40b_ep72.png)
+![Qwen3.5 Sparser 40B EP72](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_sparser_40b_ep72.png)
 
-![Qwen3 Sparser 80B EP64](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_sparser_80b_ep64.png)
+![Qwen3 Sparser 80B EP64](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_sparser_80b_ep64.png)
 
-![Qwen3.5 397B EP64 proxy](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_ep64_proxy.png)
+![Qwen3.5 397B EP64 proxy](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_ep64_proxy.png)
 
-![Qwen3.5 397B sparser EP64 proxy](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_sparser_ep64_proxy.png)
+![Qwen3.5 397B sparser EP64 proxy](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/qwen3_5_397b_sparser_ep64_proxy.png)
 
 ### 7.4 Broader MoE-module matrix
 
@@ -511,7 +511,7 @@ full-model results:
 | Qwen397 Sparser EP64 | 826.2 | 1041.5 | +26.1% |
 | Qwen40 Sparser EP72 | 234.5 | 484.5 | +106.6% |
 
-![MoE-module performance matrix](https://github.com/harryzhou2000/megatron-lm-moe-experiments/blob/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/moe_module_perf_20260719.png)
+![MoE-module performance matrix](https://raw.githubusercontent.com/harryzhou2000/megatron-lm-moe-experiments/945e8fe0091b315e7328111fff9877cab4eb65df/notes/final_presentation/assets/moe_module_perf_20260719.png)
 
 The matrix validates the expected trend: conventional 512-expert shapes still benefit,
 but the gain grows sharply when expert count, top-k, and small latent payloads make route
