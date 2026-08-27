@@ -415,15 +415,23 @@ PY
 
 ### Discover or request an allocation
 
-First inspect current allocations and reuse a suitable one when present:
+GCP-NRT allocations are private to the agent thread/session by default. A session may
+reuse its recorded allocation across multiple tasks, but it must not reuse an
+allocation created by another agent session, even when it is owned by the same user
+and appears idle or suitable. Cross-session reuse is allowed only when the user
+explicitly opts in.
+
+First inspect current allocations only to find a holder recorded by this session and to
+avoid submitting a duplicate:
 
 ```bash
 ssh gcp-nrt 'squeue -u $USER -h -o "%i %T %N %L %j"'
 ```
 
-For a new allocation, submit one non-interactive four-hour holder. The account is
-mandatory; an otherwise identical command without `--account=coreai_devtech_all`
-fails at submission.
+If no holder recorded by this session is active, submit one dedicated,
+non-interactive four-hour holder with a recognizable job name. The account is mandatory; an
+otherwise identical command without `--account=coreai_devtech_all` fails at
+submission.
 
 ```bash
 # One GPU
@@ -453,6 +461,8 @@ ssh gcp-nrt 'squeue -j <job-id> -h -o "%i %T %N %L %R"'
 ```
 
 Use the node only after the job reaches `RUNNING`. Do not use interactive `salloc`.
+Do not run work in, cancel, signal, or otherwise mutate an allocation belonging to
+another agent session.
 
 ### Sync source to persistent storage
 
@@ -524,8 +534,11 @@ python -m pytest -xvs <tests...> 2>&1 | \
 
 ### Release the allocation
 
-Cancel only the allocation created for the current task. Release an eight-GPU holder
-immediately after its last test; do not leave it idle.
+Keep the session-owned allocation alive by default so the same agent session can reuse
+it for follow-up tasks. Do not proactively cancel it after a test. Cancel only when
+the user asks, when continued retention is no longer desired for this session, or
+before submitting a replacement for an expired or unusable holder. Never cancel an
+allocation created by another agent session.
 
 ```bash
 ssh gcp-nrt 'scancel <job-id>'
@@ -534,4 +547,4 @@ ssh gcp-nrt 'sacct -j <job-id> --format=JobID,State,Elapsed,NodeList -n -P'
 ```
 
 Wait until `squeue` is empty and use `sacct` to confirm the terminal state. Do not
-cancel allocations owned by another task or user.
+cancel allocations owned by another agent session or user.

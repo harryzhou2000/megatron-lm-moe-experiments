@@ -7,3 +7,4 @@ venv
 *.pdf
 *.zip
 session*
+/tmp
